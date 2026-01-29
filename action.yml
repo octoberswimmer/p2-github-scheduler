@@ -77,7 +77,10 @@ runs:
       id: broker
       shell: bash
       run: |
-        RESPONSE=$(curl -s -X POST "${{ inputs.token-broker-url }}/token" \
+        BROKER_URL="${{ inputs.token-broker-url }}"
+        # Remove trailing /token if present to avoid double path
+        BROKER_URL="${BROKER_URL%/token}"
+        RESPONSE=$(curl -s -X POST "${BROKER_URL}/token" \
           -H "Content-Type: application/json" \
           -d "{\"token\": \"${{ steps.oidc.outputs.token }}\"}")
 
