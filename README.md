@@ -15,10 +15,13 @@ A CLI tool that reschedules GitHub Issues using P2's scheduling algorithm and up
 ## Usage
 
 ```bash
-# Schedule issues for a repository
+# Schedule issues from a GitHub Project
+p2-github-scheduler https://github.com/orgs/myorg/projects/1
+
+# Schedule issues from a repository
 p2-github-scheduler https://github.com/owner/repo
 
-# Short form
+# Short form for repositories
 p2-github-scheduler owner/repo
 
 # Dry run (show changes without updating)
@@ -45,7 +48,51 @@ Tasks with Scheduling Status set to "On Hold" will have their date fields cleare
 
 ## Authentication
 
-The tool uses GitHub's Device Flow for authentication. On first run, you'll be prompted to visit a URL and enter a code. The token is stored securely in your system keyring.
+The tool supports two authentication methods:
+
+1. **Environment variable (CI)**: Set `GITHUB_TOKEN` environment variable
+2. **Device Flow (interactive)**: On first run, you'll be prompted to visit a URL and enter a code. The token is stored securely in your system keyring.
+
+## GitHub Actions
+
+This action can be installed to automatically reschedule when issues are updated.
+
+### Setup
+
+1. Install the p2 GitHub App on your repository
+2. Create a workflow file in your repository:
+
+```yaml
+# .github/workflows/schedule-issues.yml
+name: Schedule Issues
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened, assigned, unassigned, labeled, unlabeled]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  schedule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Schedule project
+        uses: octoberswimmer/p2-github-scheduler@main
+        with:
+          token-broker-url: https://penny-pusher.octoberswimmer.com
+          installation-id: ${{ vars.GITHUB_APP_INSTALLATION_ID }}
+```
+
+### Inputs
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `token-broker-url` | Yes | URL of the p2-penny-pusher token broker |
+| `installation-id` | Yes | GitHub App installation ID |
+| `project-url` | No | GitHub Project URL (auto-detected from issue if not provided) |
+| `dry-run` | No | Show changes without applying (default: false) |
 
 ## How It Works
 

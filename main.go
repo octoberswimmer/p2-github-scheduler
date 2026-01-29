@@ -62,22 +62,32 @@ func run(cmd *cobra.Command, args []string) error {
 	url := args[0]
 
 	// Authenticate with GitHub
-	auth, err := github.LoadStoredAuth()
-	if err != nil {
-		fmt.Println("No stored GitHub authentication found. Starting device flow...")
-		auth, err = runDeviceFlow()
-		if err != nil {
-			return fmt.Errorf("authentication failed: %w", err)
-		}
-	}
+	var accessToken string
 
-	// Verify token
-	if err := github.VerifyToken(auth.AccessToken); err != nil {
-		fmt.Println("Stored token is invalid. Starting device flow...")
-		auth, err = runDeviceFlow()
+	// First check for GITHUB_TOKEN environment variable (for CI)
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		logrus.Debug("Using GITHUB_TOKEN from environment")
+		accessToken = token
+	} else {
+		// Fall back to stored auth or device flow
+		auth, err := github.LoadStoredAuth()
 		if err != nil {
-			return fmt.Errorf("authentication failed: %w", err)
+			fmt.Println("No stored GitHub authentication found. Starting device flow...")
+			auth, err = runDeviceFlow()
+			if err != nil {
+				return fmt.Errorf("authentication failed: %w", err)
+			}
 		}
+
+		// Verify token
+		if err := github.VerifyToken(auth.AccessToken); err != nil {
+			fmt.Println("Stored token is invalid. Starting device flow...")
+			auth, err = runDeviceFlow()
+			if err != nil {
+				return fmt.Errorf("authentication failed: %w", err)
+			}
+		}
+		accessToken = auth.AccessToken
 	}
 
 	// Parse the URL to determine what we're working with
@@ -91,14 +101,14 @@ func run(cmd *cobra.Command, args []string) error {
 	if urlInfo.isProject {
 		// Fetch issues directly from the project
 		fmt.Printf("Fetching items from project %s #%d...\n", urlInfo.owner, urlInfo.projectNum)
-		allIssues, err = fetchProjectItems(auth.AccessToken, urlInfo)
+		allIssues, err = fetchProjectItems(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Fetch issues from the repository
 		fmt.Printf("Scheduling tasks for %s/%s\n", urlInfo.owner, urlInfo.repo)
-		allIssues, err = fetchRepoIssues(auth.AccessToken, urlInfo)
+		allIssues, err = fetchRepoIssues(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
@@ -163,7 +173,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// Apply updates to GitHub
 	fmt.Println("\nUpdating GitHub...")
 	for _, u := range updates {
-		client := github.NewClient(auth.AccessToken, &github.GitHubRepository{Owner: u.owner, Name: u.repo})
+		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: u.owner, Name: u.repo})
 		if err := applyUpdate(client, u); err != nil {
 			logrus.Warnf("Failed to update issue #%d: %v", u.issueNum, err)
 		} else {
