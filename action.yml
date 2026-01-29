@@ -9,9 +9,6 @@ inputs:
   token-broker-url:
     description: 'URL of the p2-penny-pusher token broker'
     required: true
-  installation-id:
-    description: 'GitHub App installation ID'
-    required: true
   project-url:
     description: 'GitHub Project URL to schedule (optional, auto-detected from issue if not provided)'
     required: false
@@ -82,7 +79,7 @@ runs:
       run: |
         RESPONSE=$(curl -s -X POST "${{ inputs.token-broker-url }}/token" \
           -H "Content-Type: application/json" \
-          -d "{\"token\": \"${{ steps.oidc.outputs.token }}\", \"installation_id\": ${{ inputs.installation-id }}}")
+          -d "{\"token\": \"${{ steps.oidc.outputs.token }}\"}")
 
         TOKEN=$(echo "$RESPONSE" | jq -r '.token')
         if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then

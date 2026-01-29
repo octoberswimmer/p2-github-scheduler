@@ -82,7 +82,6 @@ jobs:
         uses: octoberswimmer/p2-github-scheduler@main
         with:
           token-broker-url: https://penny-pusher.octoberswimmer.com
-          installation-id: ${{ vars.GITHUB_APP_INSTALLATION_ID }}
 ```
 
 ### Inputs
@@ -90,7 +89,6 @@ jobs:
 | Input | Required | Description |
 |-------|----------|-------------|
 | `token-broker-url` | Yes | URL of the p2-penny-pusher token broker |
-| `installation-id` | Yes | GitHub App installation ID |
 | `project-url` | No | GitHub Project URL (auto-detected from issue if not provided) |
 | `dry-run` | No | Show changes without applying (default: false) |
 
