@@ -334,3 +334,82 @@ func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 		t.Error("expected active task to have clearDates=false")
 	}
 }
+
+func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
+	// Create a mock project info
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	// Create mock issues - one closed, one open
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Closed Task",
+			state:    "closed",
+			project:  projectInfo,
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Open Task",
+			state:    "open",
+			project:  projectInfo,
+		},
+	}
+
+	// Create mock gantt data with both tasks
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:   "owner/repo#1",
+				Name: "Closed Task",
+				Done: true,
+			},
+			{
+				ID:   "owner/repo#2",
+				Name: "Open Task",
+			},
+		},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 2 updates
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+
+	// Find the closed task update
+	var closedUpdate, openUpdate *dateUpdate
+	for i := range updates {
+		if updates[i].issueNum == 1 {
+			closedUpdate = &updates[i]
+		} else if updates[i].issueNum == 2 {
+			openUpdate = &updates[i]
+		}
+	}
+
+	if closedUpdate == nil {
+		t.Fatal("expected to find closed task update")
+	}
+	if !closedUpdate.clearDates {
+		t.Error("expected closed task to have clearDates=true")
+	}
+
+	if openUpdate == nil {
+		t.Fatal("expected to find open task update")
+	}
+	if openUpdate.clearDates {
+		t.Error("expected open task to have clearDates=false")
+	}
+}

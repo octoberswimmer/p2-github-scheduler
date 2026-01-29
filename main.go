@@ -151,7 +151,7 @@ func run(cmd *cobra.Command, args []string) error {
 	for _, u := range updates {
 		fmt.Printf("  %s #%d %s\n", u.repoKey, u.issueNum, u.name)
 		if u.clearDates {
-			fmt.Println("       (clearing dates - task is on hold)")
+			fmt.Println("       (clearing dates - task is closed or on hold)")
 		} else {
 			if !u.expectedStart.IsZero() {
 				fmt.Printf("       Expected Start: %s\n", u.expectedStart.Format("2006-01-02"))
@@ -581,7 +581,7 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 	}
 
 	for _, bar := range ganttData.Bars {
-		if bar.IsPackage || bar.Done {
+		if bar.IsPackage {
 			continue
 		}
 
@@ -596,8 +596,8 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 			continue
 		}
 
-		// On-hold tasks should have their dates cleared
-		if bar.OnHold {
+		// Closed and on-hold tasks should have their dates cleared
+		if bar.Done || bar.OnHold {
 			update := dateUpdate{
 				owner:      iwp.owner,
 				repo:       iwp.repo,
