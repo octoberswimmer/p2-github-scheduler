@@ -9,8 +9,8 @@ inputs:
   token-broker-url:
     description: 'URL of the p2-penny-pusher token broker'
     required: true
-  project-url:
-    description: 'GitHub Project URL to schedule (optional, auto-detected from issue if not provided)'
+  github-url:
+    description: 'GitHub URL to schedule (project, repo, or issue URL). Auto-detected from issue event if not provided.'
     required: false
   dry-run:
     description: 'Show changes without applying them'
@@ -64,93 +64,34 @@ runs:
           --runner-arch "${RUNNER_ARCH}" \
           --dest "${dest}"
 
-    - name: Get OIDC token
-      id: oidc
+    - name: Get installation token
+      id: token
       shell: bash
+      working-directory: ${{ github.action_path }}
       run: |
-        OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=p2-penny-pusher" | jq -r '.value')
-        echo "::add-mask::$OIDC_TOKEN"
-        echo "token=$OIDC_TOKEN" >> $GITHUB_OUTPUT
-
-    - name: Get installation token from broker
-      id: broker
-      shell: bash
-      run: |
-        BROKER_URL="${{ inputs.token-broker-url }}"
-        # Remove trailing /token if present to avoid double path
-        BROKER_URL="${BROKER_URL%/token}"
-        RESPONSE=$(curl -s -X POST "${BROKER_URL}/token" \
-          -H "Content-Type: application/json" \
-          -d "{\"token\": \"${{ steps.oidc.outputs.token }}\"}")
-
-        TOKEN=$(echo "$RESPONSE" | jq -r '.token')
-        if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-          echo "::error::Failed to get installation token: $RESPONSE"
-          exit 1
-        fi
-
-        echo "::add-mask::$TOKEN"
-        echo "token=$TOKEN" >> $GITHUB_OUTPUT
-
-    - name: Get project URL from issue
-      id: project
-      if: inputs.project-url == ''
-      shell: bash
-      env:
-        GH_TOKEN: ${{ steps.broker.outputs.token }}
-      run: |
-        PROJECT_URL=$(gh api graphql -f query='
-          query($owner: String!, $repo: String!, $number: Int!) {
-            repository(owner: $owner, name: $repo) {
-              issue(number: $number) {
-                projectItems(first: 1) {
-                  nodes {
-                    project {
-                      number
-                      owner {
-                        ... on Organization {
-                          login
-                        }
-                        ... on User {
-                          login
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        ' -f owner="${{ github.repository_owner }}" \
-          -f repo="${{ github.event.repository.name }}" \
-          -F number=${{ github.event.issue.number }} \
-          --jq '.data.repository.issue.projectItems.nodes[0].project | "https://github.com/orgs/\(.owner.login)/projects/\(.number)"' 2>/dev/null || echo "")
-
-        if [ -z "$PROJECT_URL" ] || [ "$PROJECT_URL" = "https://github.com/orgs//projects/" ]; then
-          echo "Issue is not linked to a project, skipping"
-          echo "has_project=false" >> $GITHUB_OUTPUT
-        else
-          echo "project_url=$PROJECT_URL" >> $GITHUB_OUTPUT
-          echo "has_project=true" >> $GITHUB_OUTPUT
-        fi
+        go run ./cmd/actions/token --broker-url "${{ inputs.token-broker-url }}"
 
     - name: Run scheduler
-      if: steps.project.outputs.has_project == 'true' || inputs.project-url != ''
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ steps.broker.outputs.token }}
+        GITHUB_TOKEN: ${{ steps.token.outputs.token }}
       run: |
-        PROJECT_URL="${{ inputs.project-url }}"
-        if [ -z "$PROJECT_URL" ]; then
-          PROJECT_URL="${{ steps.project.outputs.project_url }}"
+        GITHUB_URL="${{ inputs.github-url }}"
+        if [ -z "$GITHUB_URL" ]; then
+          # Auto-detect from issue event
+          if [ -n "${{ github.event.issue.number }}" ]; then
+            GITHUB_URL="https://github.com/${{ github.repository }}/issues/${{ github.event.issue.number }}"
+          else
+            echo "::error::No github-url provided and no issue event detected"
+            exit 1
+          fi
         fi
 
-        echo "Scheduling project: $PROJECT_URL"
+        echo "Scheduling: $GITHUB_URL"
 
         ARGS=""
         if [ "${{ inputs.dry-run }}" = "true" ]; then
           ARGS="--dry-run"
         fi
 
-        p2-github-scheduler $ARGS "$PROJECT_URL"
+        p2-github-scheduler $ARGS "$GITHUB_URL"
