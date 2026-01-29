@@ -1,8 +1,7 @@
 package main
 
 import (
-	"archive/tar"
-	"compress/gzip"
+	"archive/zip"
 	"flag"
 	"fmt"
 	"io"
@@ -47,21 +46,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	cpuKey, err := normalizeArch(runnerArch)
+	cpuKey, err := normalizeArch(platformKey, runnerArch)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Archive naming: p2-github-scheduler_Linux_x86_64.tar.gz
 	var archiveName string
 	var binaryName string
-	archKey := archiveArch(cpuKey)
 	if platformKey == "windows" {
-		archiveName = fmt.Sprintf("p2-github-scheduler_Windows_%s.zip", archKey)
+		archiveName = fmt.Sprintf("p2-github-scheduler_windows_amd64_%s.zip", version)
 		binaryName = "p2-github-scheduler.exe"
 	} else {
-		osKey := titleCase(platformKey)
-		archiveName = fmt.Sprintf("p2-github-scheduler_%s_%s.tar.gz", osKey, archKey)
+		archiveName = fmt.Sprintf("p2-github-scheduler_%s_%s_%s.zip", platformKey, cpuKey, version)
 		binaryName = "p2-github-scheduler"
 	}
 
@@ -84,12 +80,7 @@ func main() {
 		log.Fatalf("download archive: %v", err)
 	}
 
-	var binaryPath string
-	if strings.HasSuffix(archiveName, ".tar.gz") {
-		binaryPath, err = extractTarGz(archivePath, binaryName, tmpDir)
-	} else {
-		log.Fatal("zip extraction not implemented")
-	}
+	binaryPath, err := extractBinary(archivePath, binaryName, tmpDir)
 	if err != nil {
 		log.Fatalf("extract binary: %v", err)
 	}
@@ -124,13 +115,6 @@ func main() {
 	fmt.Printf("Installed p2-github-scheduler to %s\n", finalPath)
 }
 
-func titleCase(s string) string {
-	if len(s) == 0 {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
 func normalizeOS(osName string) (string, error) {
 	switch strings.ToLower(osName) {
 	case "linux":
@@ -144,25 +128,17 @@ func normalizeOS(osName string) (string, error) {
 	}
 }
 
-func normalizeArch(arch string) (string, error) {
+func normalizeArch(platformKey, arch string) (string, error) {
 	switch strings.ToLower(arch) {
 	case "amd64", "x86_64", "x64":
 		return "amd64", nil
 	case "arm64", "aarch64":
+		if platformKey == "windows" {
+			return "", fmt.Errorf("windows arm64 is not supported")
+		}
 		return "arm64", nil
 	default:
 		return "", fmt.Errorf("unsupported architecture: %q", arch)
-	}
-}
-
-func archiveArch(arch string) string {
-	switch arch {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "arm64"
-	default:
-		return arch
 	}
 }
 
@@ -190,49 +166,56 @@ func downloadFile(url, dest string) error {
 	return nil
 }
 
-func extractTarGz(archivePath, binaryName, destDir string) (string, error) {
-	file, err := os.Open(archivePath)
+func extractBinary(archivePath, binaryName, destDir string) (string, error) {
+	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer reader.Close()
 
-	gzr, err := gzip.NewReader(file)
-	if err != nil {
-		return "", err
-	}
-	defer gzr.Close()
-
-	tr := tar.NewReader(gzr)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-
-		if header.Typeflag != tar.TypeReg {
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() {
 			continue
 		}
-
-		name := filepath.Base(header.Name)
-		if name == binaryName {
+		name := strings.TrimSuffix(file.Name, "/")
+		if strings.HasSuffix(name, binaryName) {
 			extracted := filepath.Join(destDir, binaryName)
-			out, err := os.Create(extracted)
-			if err != nil {
+			if err := extractZipFile(file, extracted); err != nil {
 				return "", err
 			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				return "", err
-			}
-			out.Close()
 			return extracted, nil
 		}
 	}
 	return "", fmt.Errorf("%s not found in archive", binaryName)
+}
+
+func extractZipFile(file *zip.File, dest string) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+
+	rc, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, rc); err != nil {
+		return err
+	}
+
+	if mode := file.Mode(); mode != 0 {
+		if err := out.Chmod(mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func moveFile(src, dest string) error {
