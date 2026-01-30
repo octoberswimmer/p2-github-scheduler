@@ -25,6 +25,18 @@ Your GitHub Project needs the following custom fields:
 
 Tasks with Scheduling Status set to "On Hold" will have their date fields cleared.
 
+## Scheduling Warnings
+
+When an issue cannot be scheduled, a comment is automatically posted to the issue explaining the problem. Comments are automatically removed when the issue becomes schedulable.
+
+Issues cannot be scheduled when:
+
+- **Dependency cycle**: The issue is part of a circular dependency chain (A blocks B, B blocks A)
+- **Missing dependency**: The issue depends on another issue that is not in the project
+- **On-hold dependency**: The issue depends on another issue that has Scheduling Status set to "On Hold"
+
+Issues with scheduling problems will not have their date fields updated until the problem is resolved.
+
 ## Manual Workflow Setup
 
 If you prefer to set up manually, create this workflow file:
@@ -76,7 +88,9 @@ jobs:
 
 The installation token is scoped to only:
 - The repository that triggered the workflow
-- Permissions: `issues:read`, `metadata:read`, `projects:write`
+- Permissions: `issues:write`, `metadata:read`, `projects:write`
+
+The `issues:write` permission is required to post and manage scheduling warning comments.
 
 ## CLI Usage
 

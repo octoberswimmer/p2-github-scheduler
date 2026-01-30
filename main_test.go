@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/octoberswimmer/p2/github"
@@ -236,7 +237,7 @@ func TestIssuesToTasks_OnHoldViaSchedulingStatus(t *testing.T) {
 		},
 	}
 
-	tasks, _ := issuesToTasks(issues)
+	tasks, _, _ := issuesToTasks(issues)
 
 	// Find tasks by title
 	taskMap := make(map[string]planner.Task)
@@ -271,7 +272,7 @@ func TestIssuesToTasks_DraftIssuesAreOnHold(t *testing.T) {
 		},
 	}
 
-	tasks, _ := issuesToTasks(issues)
+	tasks, _, _ := issuesToTasks(issues)
 
 	// Find tasks by title
 	taskMap := make(map[string]planner.Task)
@@ -339,7 +340,7 @@ func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 2 updates
 	if len(updates) != 2 {
@@ -415,7 +416,7 @@ func TestPrepareUpdates_OnHoldWithOnlyEstimatesSkipped(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 0 updates - on-hold with only estimates should be skipped
 	if len(updates) != 0 {
@@ -452,7 +453,7 @@ func TestIssuesToTasks_PreservesOrder(t *testing.T) {
 		},
 	}
 
-	tasks, _ := issuesToTasks(issues)
+	tasks, _, _ := issuesToTasks(issues)
 
 	if len(tasks) != 3 {
 		t.Fatalf("expected 3 tasks, got %d", len(tasks))
@@ -492,7 +493,7 @@ func TestIssuesToTasks_SkipsInaccessibleDependencies(t *testing.T) {
 		},
 	}
 
-	tasks, _ := issuesToTasks(issues)
+	tasks, _, _ := issuesToTasks(issues)
 
 	// Find the blocked task
 	var blockedTask *planner.Task
@@ -537,7 +538,7 @@ func TestIssuesToTasks_UnassignedTasksGetDefaultUser(t *testing.T) {
 		},
 	}
 
-	tasks, users := issuesToTasks(issues)
+	tasks, users, _ := issuesToTasks(issues)
 
 	// Find tasks by title
 	taskMap := make(map[string]planner.Task)
@@ -724,7 +725,7 @@ func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 2 updates
 	if len(updates) != 2 {
@@ -807,7 +808,7 @@ func TestPrepareUpdates_ClosedTasksWithoutDatesSkipped(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have only 1 update (the open task), closed task without dates is skipped
 	if len(updates) != 1 {
@@ -871,7 +872,7 @@ func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 2 updates - closed task with estimates should be included
 	if len(updates) != 2 {
@@ -932,7 +933,7 @@ func TestPrepareUpdates_OnHoldDetectedFromGitHubNotGantt(t *testing.T) {
 		Bars: []planner.GanttBar{},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 1 update - on-hold task with dates should be cleared
 	// even though it's not in the GanttBars
@@ -984,7 +985,7 @@ func TestPrepareUpdates_ClosedDetectedFromGitHubNotGantt(t *testing.T) {
 		Bars: []planner.GanttBar{},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 1 update - closed task with estimates should be cleared
 	if len(updates) != 1 {
@@ -1048,7 +1049,7 @@ func TestPrepareUpdates_DifferentReposSameIssueNumber(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 2 updates: one to clear dates for closed task,
 	// one to set dates for open task
@@ -1152,7 +1153,7 @@ func TestPrepareUpdates_MultipleReposWithOverlappingIssueNumbers(t *testing.T) {
 		},
 	}
 
-	updates := prepareUpdates(ganttData, issues)
+	updates := prepareUpdates(ganttData, issues, nil)
 
 	// Should have 5 updates total
 	if len(updates) != 5 {
@@ -1185,6 +1186,386 @@ func TestPrepareUpdates_MultipleReposWithOverlappingIssueNumbers(t *testing.T) {
 		if u.repo == "a2b" && u.clearDates {
 			t.Errorf("a2b #%d should not have clearDates=true", u.issueNum)
 		}
+	}
+}
+
+func TestIssuesToTasks_DetectsMissingDependencies(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Task with missing dep",
+			state:    "open",
+			blockedBy: []github.IssueRef{
+				{Owner: "other", Repo: "missing", Number: 99},
+			},
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Task with valid dep",
+			state:    "open",
+			blockedBy: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 1},
+			},
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	// Should have 1 scheduling issue for missing dependency
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+
+	si := schedIssues[0]
+	if si.reason != "missing_dependency" {
+		t.Errorf("expected reason 'missing_dependency', got %q", si.reason)
+	}
+	if si.issueNum != 1 {
+		t.Errorf("expected issue #1, got #%d", si.issueNum)
+	}
+	if len(si.details) != 1 || si.details[0] != "other/missing#99" {
+		t.Errorf("expected details ['other/missing#99'], got %v", si.details)
+	}
+}
+
+func TestIssuesToTasks_DetectsOnHoldDependencies(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:            "owner",
+			repo:             "repo",
+			issueNum:         1,
+			title:            "On-hold task",
+			state:            "open",
+			schedulingStatus: "On Hold",
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Task depending on on-hold",
+			state:    "open",
+			blockedBy: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 1},
+			},
+		},
+	}
+
+	tasks, _, schedIssues := issuesToTasks(issues)
+
+	// Should have 1 scheduling issue for on-hold dependency
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+
+	si := schedIssues[0]
+	if si.reason != "onhold_dependency" {
+		t.Errorf("expected reason 'onhold_dependency', got %q", si.reason)
+	}
+	if si.issueNum != 2 {
+		t.Errorf("expected issue #2, got #%d", si.issueNum)
+	}
+
+	// The on-hold dependency should NOT be in DependsOn
+	var task2 planner.Task
+	for _, t := range tasks {
+		if t.ID == "owner/repo#2" {
+			task2 = t
+			break
+		}
+	}
+	if len(task2.DependsOn) != 0 {
+		t.Errorf("expected no DependsOn for task with on-hold dep, got %v", task2.DependsOn)
+	}
+}
+
+func TestIssuesToTasks_ClosedDependencyAllowed(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:            "owner",
+			repo:             "repo",
+			issueNum:         1,
+			title:            "Closed on-hold task",
+			state:            "closed",
+			schedulingStatus: "On Hold",
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Task depending on closed",
+			state:    "open",
+			blockedBy: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 1},
+			},
+		},
+	}
+
+	tasks, _, schedIssues := issuesToTasks(issues)
+
+	// Should have NO scheduling issues - closed deps are allowed
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues, got %d: %+v", len(schedIssues), schedIssues)
+	}
+
+	// The closed dependency SHOULD be in DependsOn (work can start)
+	var task2 planner.Task
+	for _, t := range tasks {
+		if t.ID == "owner/repo#2" {
+			task2 = t
+			break
+		}
+	}
+	if len(task2.DependsOn) != 1 {
+		t.Errorf("expected 1 DependsOn for task with closed dep, got %v", task2.DependsOn)
+	}
+}
+
+func TestIssuesToTasks_OnHoldTaskNoSchedulingIssue(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Missing dep task",
+			state:    "open",
+			blockedBy: []github.IssueRef{
+				{Owner: "other", Repo: "missing", Number: 99},
+			},
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:            "owner",
+			repo:             "repo",
+			issueNum:         2,
+			title:            "On-hold with missing dep",
+			state:            "open",
+			schedulingStatus: "On Hold",
+			blockedBy: []github.IssueRef{
+				{Owner: "other", Repo: "missing", Number: 99},
+			},
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	// Should have only 1 scheduling issue - the on-hold task doesn't get one
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+	if schedIssues[0].issueNum != 1 {
+		t.Errorf("expected scheduling issue for #1, got #%d", schedIssues[0].issueNum)
+	}
+}
+
+func TestExtractCycleIssues(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Task in cycle",
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Another task in cycle",
+		},
+	}
+
+	entries := planner.ScheduledEntries{
+		Entries: []planner.ScheduledEntry{
+			{ID: "owner/repo#1", Name: "Task in cycle", Cycle: []string{"owner/repo#1", "owner/repo#2", "owner/repo#1"}},
+			{ID: "owner/repo#2", Name: "Another task in cycle", Cycle: []string{"owner/repo#2", "owner/repo#1", "owner/repo#2"}},
+		},
+	}
+
+	schedIssues := extractCycleIssues(entries, issues, nil)
+
+	if len(schedIssues) != 2 {
+		t.Fatalf("expected 2 scheduling issues, got %d", len(schedIssues))
+	}
+
+	for _, si := range schedIssues {
+		if si.reason != "cycle" {
+			t.Errorf("expected reason 'cycle', got %q", si.reason)
+		}
+		if len(si.details) == 0 {
+			t.Errorf("expected cycle path in details")
+		}
+	}
+}
+
+func TestExtractCycleIssues_NoDuplicates(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Task with missing dep and cycle",
+		},
+	}
+
+	// Pre-existing scheduling issue for missing dep
+	existing := []schedulingIssue{
+		{
+			issueRef: "github.com/owner/repo/issues/1",
+			issueNum: 1,
+			reason:   "missing_dependency",
+		},
+	}
+
+	entries := planner.ScheduledEntries{
+		Entries: []planner.ScheduledEntry{
+			{ID: "owner/repo#1", Name: "Task", Cycle: []string{"owner/repo#1", "owner/repo#2", "owner/repo#1"}},
+		},
+	}
+
+	schedIssues := extractCycleIssues(entries, issues, existing)
+
+	// Should NOT add another issue for the same task
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue (no duplicate), got %d", len(schedIssues))
+	}
+}
+
+func TestFormatSchedulingComment_Cycle(t *testing.T) {
+	si := schedulingIssue{
+		reason:  "cycle",
+		details: []string{"owner/repo#1", "owner/repo#2", "owner/repo#1"},
+	}
+
+	comment := formatSchedulingComment(si)
+
+	if !strings.Contains(comment, schedulingCommentMarker) {
+		t.Error("comment should contain the marker")
+	}
+	if !strings.Contains(comment, "dependency cycle") {
+		t.Error("comment should mention dependency cycle")
+	}
+	if !strings.Contains(comment, "owner/repo#1") {
+		t.Error("comment should contain cycle path")
+	}
+}
+
+func TestFormatSchedulingComment_MissingDependency(t *testing.T) {
+	si := schedulingIssue{
+		reason:  "missing_dependency",
+		details: []string{"other/repo#99"},
+	}
+
+	comment := formatSchedulingComment(si)
+
+	if !strings.Contains(comment, schedulingCommentMarker) {
+		t.Error("comment should contain the marker")
+	}
+	if !strings.Contains(comment, "not in this project") {
+		t.Error("comment should mention issues not in project")
+	}
+	if !strings.Contains(comment, "other/repo#99") {
+		t.Error("comment should list the missing dependency")
+	}
+}
+
+func TestFormatSchedulingComment_OnHoldDependency(t *testing.T) {
+	si := schedulingIssue{
+		reason:  "onhold_dependency",
+		details: []string{"owner/repo#5"},
+	}
+
+	comment := formatSchedulingComment(si)
+
+	if !strings.Contains(comment, schedulingCommentMarker) {
+		t.Error("comment should contain the marker")
+	}
+	if !strings.Contains(comment, "on hold") {
+		t.Error("comment should mention on hold")
+	}
+	if !strings.Contains(comment, "owner/repo#5") {
+		t.Error("comment should list the on-hold dependency")
+	}
+}
+
+func TestPrepareUpdates_UnschedulableIssuesClearDates(t *testing.T) {
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "Unschedulable task",
+			state:              "open",
+			project:            projectInfo,
+			hasSchedulingDates: true,
+		},
+	}
+
+	ganttData := planner.GanttData{}
+
+	unschedulable := map[string]bool{
+		"github.com/owner/repo/issues/1": true,
+	}
+
+	updates := prepareUpdates(ganttData, issues, unschedulable)
+
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+
+	if !updates[0].clearDates {
+		t.Error("expected clearDates=true for unschedulable issue")
+	}
+	if updates[0].clearReason != "unschedulable" {
+		t.Errorf("expected clearReason='unschedulable', got %q", updates[0].clearReason)
+	}
+}
+
+func TestPrepareUpdates_UnschedulableNoDatesNoClear(t *testing.T) {
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "Unschedulable task without dates",
+			state:              "open",
+			project:            projectInfo,
+			hasSchedulingDates: false, // No dates to clear
+		},
+	}
+
+	ganttData := planner.GanttData{}
+
+	unschedulable := map[string]bool{
+		"github.com/owner/repo/issues/1": true,
+	}
+
+	updates := prepareUpdates(ganttData, issues, unschedulable)
+
+	// Should have no updates - no dates to clear
+	if len(updates) != 0 {
+		t.Fatalf("expected 0 updates (no dates to clear), got %d", len(updates))
 	}
 }
 

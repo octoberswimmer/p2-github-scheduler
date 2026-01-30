@@ -123,7 +123,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Convert issues to p2 tasks
 	fmt.Println("Converting to p2 tasks...")
-	tasks, users := issuesToTasks(allIssues)
+	tasks, users, schedIssues := issuesToTasks(allIssues)
 	fmt.Printf("Created %d tasks with %d users\n", len(tasks), len(users))
 
 	if len(tasks) == 0 {
@@ -141,37 +141,61 @@ func run(cmd *cobra.Command, args []string) error {
 	base := time.Now()
 	entries := planner.ScheduleWithUsers(tasks, users)
 
+	// Extract cycle information from scheduler results
+	schedIssues = extractCycleIssues(entries, allIssues, schedIssues)
+
 	ganttData, err := planner.ComputeGanttData(entries, tasks, true, base, users)
 	if err != nil {
 		return fmt.Errorf("scheduling failed: %w", err)
 	}
 
-	// Prepare updates
-	updates := prepareUpdates(ganttData, allIssues)
+	// Build set of issues with scheduling problems
+	unschedulableIssues := make(map[string]bool)
+	for _, si := range schedIssues {
+		unschedulableIssues[si.issueRef] = true
+	}
 
-	if len(updates) == 0 {
+	// Prepare updates
+	updates := prepareUpdates(ganttData, allIssues, unschedulableIssues)
+
+	// Print scheduling issues
+	if len(schedIssues) > 0 {
+		fmt.Printf("\nFound %d issues with scheduling problems:\n", len(schedIssues))
+		for _, si := range schedIssues {
+			fmt.Printf("  %s/%s #%d: %s\n", si.owner, si.repo, si.issueNum, si.reason)
+			for _, detail := range si.details {
+				fmt.Printf("       - %s\n", detail)
+			}
+		}
+	}
+
+	if len(updates) == 0 && len(schedIssues) == 0 {
 		fmt.Println("No date changes needed")
 		return nil
 	}
 
-	fmt.Printf("\nFound %d tasks with date changes:\n", len(updates))
-	for _, u := range updates {
-		fmt.Printf("  %s #%d %s\n", u.repoKey, u.issueNum, u.name)
-		if u.clearDates {
-			if u.clearReason == "closed" {
-				fmt.Println("       (clearing dates and estimates - task is closed)")
+	if len(updates) > 0 {
+		fmt.Printf("\nFound %d tasks with date changes:\n", len(updates))
+		for _, u := range updates {
+			fmt.Printf("  %s #%d %s\n", u.repoKey, u.issueNum, u.name)
+			if u.clearDates {
+				if u.clearReason == "closed" {
+					fmt.Println("       (clearing dates and estimates - task is closed)")
+				} else if u.clearReason == "unschedulable" {
+					fmt.Println("       (clearing dates - has scheduling issues)")
+				} else {
+					fmt.Println("       (clearing dates - task is on hold)")
+				}
 			} else {
-				fmt.Println("       (clearing dates - task is on hold)")
-			}
-		} else {
-			if !u.expectedStart.IsZero() {
-				fmt.Printf("       Expected Start: %s\n", u.expectedStart.Format("2006-01-02"))
-			}
-			if !u.expectedCompletion.IsZero() {
-				fmt.Printf("       Expected Completion: %s\n", u.expectedCompletion.Format("2006-01-02"))
-			}
-			if !u.completion98.IsZero() {
-				fmt.Printf("       98%% Completion: %s\n", u.completion98.Format("2006-01-02"))
+				if !u.expectedStart.IsZero() {
+					fmt.Printf("       Expected Start: %s\n", u.expectedStart.Format("2006-01-02"))
+				}
+				if !u.expectedCompletion.IsZero() {
+					fmt.Printf("       Expected Completion: %s\n", u.expectedCompletion.Format("2006-01-02"))
+				}
+				if !u.completion98.IsZero() {
+					fmt.Printf("       98%% Completion: %s\n", u.completion98.Format("2006-01-02"))
+				}
 			}
 		}
 	}
@@ -189,6 +213,41 @@ func run(cmd *cobra.Command, args []string) error {
 			logrus.Warnf("Failed to update issue #%d: %v", u.issueNum, err)
 		} else {
 			fmt.Printf("  Updated %s #%d\n", u.repoKey, u.issueNum)
+		}
+	}
+
+	// Post or update scheduling issue comments
+	if len(schedIssues) > 0 {
+		fmt.Println("\nUpdating scheduling comments...")
+		for _, si := range schedIssues {
+			client := github.NewClient(accessToken, &github.GitHubRepository{Owner: si.owner, Name: si.repo})
+			if err := postOrUpdateSchedulingComment(client, si); err != nil {
+				logrus.Warnf("Failed to post comment for #%d: %v", si.issueNum, err)
+			} else {
+				fmt.Printf("  Posted comment on %s/%s #%d\n", si.owner, si.repo, si.issueNum)
+			}
+		}
+	}
+
+	// Delete comments for issues that are now schedulable
+	fmt.Println("\nCleaning up resolved scheduling comments...")
+	for ref, iwp := range allIssues {
+		// Skip draft issues
+		if iwp.isDraft {
+			continue
+		}
+		// Skip issues that still have problems
+		if unschedulableIssues[ref] {
+			continue
+		}
+		// Skip on-hold and closed issues (they don't need scheduling comments cleaned up)
+		if iwp.schedulingStatus == "On Hold" || strings.EqualFold(iwp.state, "closed") {
+			continue
+		}
+
+		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: iwp.owner, Name: iwp.repo})
+		if err := deleteSchedulingComment(client, iwp.issueNum); err != nil {
+			logrus.Warnf("Failed to delete comment for #%d: %v", iwp.issueNum, err)
 		}
 	}
 
@@ -239,6 +298,16 @@ type dateUpdate struct {
 	completion98       time.Time
 	clearDates         bool   // true if dates should be cleared (closed/on-hold tasks)
 	clearReason        string // "closed" or "on hold"
+}
+
+// schedulingIssue tracks problems that prevent an issue from being scheduled
+type schedulingIssue struct {
+	issueRef string   // e.g., "github.com/owner/repo/issues/123"
+	issueNum int      // issue number
+	owner    string   // repository owner
+	repo     string   // repository name
+	reason   string   // "cycle", "missing_dependency", "onhold_dependency"
+	details  []string // cycle path or list of problematic deps
 }
 
 func parseGitHubURL(url string) (*urlInfo, error) {
@@ -591,10 +660,19 @@ func buildReverseDependencies(issues map[string]issueWithProject) {
 	}
 }
 
-func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfile.User) {
+func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfile.User, []schedulingIssue) {
 	gen := lseq.NewGenerator("scheduler")
 	userSet := make(map[string]bool)
 	var tasks []planner.Task
+	var schedIssues []schedulingIssue
+
+	// Build a set of on-hold issues for dependency checking
+	onHoldIssues := make(map[string]bool)
+	for ref, iwp := range issues {
+		if iwp.schedulingStatus == "On Hold" || iwp.isDraft {
+			onHoldIssues[ref] = true
+		}
+	}
 
 	// Convert map to slice and sort by order to preserve GitHub Project ordering
 	type refIssue struct {
@@ -661,15 +739,56 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 			task.PackageID = iwp.milestone
 		}
 
+		// Track scheduling issues for this task
+		var missingDeps []string
+		var onHoldDeps []string
+
 		// Map blockedBy to DependsOn (only if the blocking task exists in our data)
 		for _, blocker := range iwp.blockedBy {
 			depID := fmt.Sprintf("%s/%s#%d", blocker.Owner, blocker.Repo, blocker.Number)
 			issueKey := fmt.Sprintf("github.com/%s/%s/issues/%d", blocker.Owner, blocker.Repo, blocker.Number)
-			if _, exists := issues[issueKey]; exists {
-				task.DependsOn = append(task.DependsOn, depID)
-				logrus.Debugf("Added dependency: %s depends on %s", task.ID, depID)
-			} else {
+
+			blockerIssue, exists := issues[issueKey]
+			if !exists {
+				// Missing dependency - not in the project
+				missingDeps = append(missingDeps, depID)
 				logrus.Warnf("Skipping dependency %s for %s: task not accessible (grant access to %s/%s)", depID, task.ID, blocker.Owner, blocker.Repo)
+				continue
+			}
+
+			// Check if the dependency is on-hold (but not closed - closed deps are ok)
+			if onHoldIssues[issueKey] && !strings.EqualFold(blockerIssue.state, "closed") {
+				onHoldDeps = append(onHoldDeps, depID)
+				logrus.Debugf("Dependency %s for %s is on-hold", depID, task.ID)
+				// Don't add on-hold deps to DependsOn - they would block scheduling
+				continue
+			}
+
+			task.DependsOn = append(task.DependsOn, depID)
+			logrus.Debugf("Added dependency: %s depends on %s", task.ID, depID)
+		}
+
+		// Record scheduling issues for non-on-hold, non-closed tasks
+		if !task.OnHold && !task.Done {
+			if len(missingDeps) > 0 {
+				schedIssues = append(schedIssues, schedulingIssue{
+					issueRef: ref,
+					issueNum: iwp.issueNum,
+					owner:    iwp.owner,
+					repo:     iwp.repo,
+					reason:   "missing_dependency",
+					details:  missingDeps,
+				})
+			}
+			if len(onHoldDeps) > 0 {
+				schedIssues = append(schedIssues, schedulingIssue{
+					issueRef: ref,
+					issueNum: iwp.issueNum,
+					owner:    iwp.owner,
+					repo:     iwp.repo,
+					reason:   "onhold_dependency",
+					details:  onHoldDeps,
+				})
 			}
 		}
 
@@ -707,10 +826,44 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 		})
 	}
 
-	return tasks, users
+	return tasks, users, schedIssues
 }
 
-func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProject) []dateUpdate {
+// extractCycleIssues checks scheduler results for dependency cycles and adds them to scheduling issues
+func extractCycleIssues(entries planner.ScheduledEntries, issues map[string]issueWithProject, existing []schedulingIssue) []schedulingIssue {
+	// Build a set of issues that already have scheduling issues (avoid duplicates)
+	hasIssue := make(map[string]bool)
+	for _, si := range existing {
+		hasIssue[si.issueRef] = true
+	}
+
+	for _, entry := range entries.Entries {
+		if entry.IsPackage || len(entry.Cycle) == 0 {
+			continue
+		}
+
+		// Find the issue for this entry
+		for ref, iwp := range issues {
+			taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
+			if taskID == entry.ID && !hasIssue[ref] {
+				existing = append(existing, schedulingIssue{
+					issueRef: ref,
+					issueNum: iwp.issueNum,
+					owner:    iwp.owner,
+					repo:     iwp.repo,
+					reason:   "cycle",
+					details:  entry.Cycle,
+				})
+				hasIssue[ref] = true
+				break
+			}
+		}
+	}
+
+	return existing
+}
+
+func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProject, unschedulable map[string]bool) []dateUpdate {
 	var updates []dateUpdate
 
 	// Track which issues we've processed for clearing
@@ -767,7 +920,37 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 		taskToIssue[taskID] = iwp
 	}
 
-	// Second pass: check gantt bars for active tasks that need date updates
+	// Second pass: handle unschedulable issues (clear their dates)
+	for ref, iwp := range issues {
+		if iwp.project == nil {
+			continue
+		}
+
+		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
+
+		// Skip if already processed (on-hold or closed)
+		if processed[taskID] {
+			continue
+		}
+
+		// Check if this issue has scheduling problems
+		if unschedulable[ref] && iwp.hasSchedulingDates {
+			processed[taskID] = true
+			update := dateUpdate{
+				owner:       iwp.owner,
+				repo:        iwp.repo,
+				repoKey:     fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
+				issueNum:    iwp.issueNum,
+				name:        iwp.title,
+				project:     iwp.project,
+				clearDates:  true,
+				clearReason: "unschedulable",
+			}
+			updates = append(updates, update)
+		}
+	}
+
+	// Third pass: check gantt bars for active tasks that need date updates
 	for _, bar := range ganttData.Bars {
 		if bar.IsPackage {
 			continue
@@ -784,8 +967,14 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 			continue
 		}
 
-		// Skip if already processed (on-hold or closed)
+		// Skip if already processed (on-hold, closed, or unschedulable)
 		if processed[bar.ID] {
+			continue
+		}
+
+		// Skip issues with scheduling problems (don't write dates)
+		ref := fmt.Sprintf("github.com/%s/%s/issues/%d", iwp.owner, iwp.repo, iwp.issueNum)
+		if unschedulable[ref] {
 			continue
 		}
 
@@ -805,6 +994,99 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 	}
 
 	return updates
+}
+
+const schedulingCommentMarker = "<!-- p2-scheduler-comment -->"
+
+// formatSchedulingComment creates a comment body for a scheduling issue
+func formatSchedulingComment(si schedulingIssue) string {
+	var sb strings.Builder
+	sb.WriteString(schedulingCommentMarker)
+	sb.WriteString("\n**Scheduling Notice**\n\n")
+
+	switch si.reason {
+	case "cycle":
+		sb.WriteString("This issue cannot be scheduled because it is part of a dependency cycle.\n\n")
+		sb.WriteString("**Cycle path:**\n")
+		for i, id := range si.details {
+			if i > 0 {
+				sb.WriteString(" → ")
+			}
+			sb.WriteString(id)
+		}
+		sb.WriteString("\n")
+	case "missing_dependency":
+		sb.WriteString("This issue cannot be scheduled because it depends on issues not in this project.\n\n")
+		sb.WriteString("**Missing dependencies:**\n")
+		for _, dep := range si.details {
+			sb.WriteString(fmt.Sprintf("- %s\n", dep))
+		}
+	case "onhold_dependency":
+		sb.WriteString("This issue cannot be scheduled because it depends on issues that are on hold.\n\n")
+		sb.WriteString("**On-hold dependencies:**\n")
+		for _, dep := range si.details {
+			sb.WriteString(fmt.Sprintf("- %s\n", dep))
+		}
+	}
+
+	sb.WriteString("\n---\n*This comment is automatically managed by p2-github-scheduler*")
+	return sb.String()
+}
+
+// findSchedulingComment finds the comment ID of an existing scheduling comment on an issue
+func findSchedulingComment(client *github.Client, issueNum int) (int64, error) {
+	comments, err := client.GetIssueComments(issueNum)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, comment := range comments {
+		body, ok := comment["body"].(string)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(body, schedulingCommentMarker) {
+			// Extract the comment ID
+			id, ok := comment["id"].(float64)
+			if ok {
+				return int64(id), nil
+			}
+		}
+	}
+
+	return 0, nil // No existing comment found
+}
+
+// postOrUpdateSchedulingComment posts a new comment or updates an existing one
+func postOrUpdateSchedulingComment(client *github.Client, si schedulingIssue) error {
+	existingID, err := findSchedulingComment(client, si.issueNum)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing comment: %w", err)
+	}
+
+	body := formatSchedulingComment(si)
+
+	if existingID > 0 {
+		// Update existing comment
+		return client.UpdateIssueComment(existingID, body)
+	}
+
+	// Create new comment
+	return client.CreateIssueComment(si.issueNum, body)
+}
+
+// deleteSchedulingComment removes an existing scheduling comment if present
+func deleteSchedulingComment(client *github.Client, issueNum int) error {
+	existingID, err := findSchedulingComment(client, issueNum)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing comment: %w", err)
+	}
+
+	if existingID == 0 {
+		return nil // No comment to delete
+	}
+
+	return client.DeleteIssueComment(existingID)
 }
 
 func applyUpdate(client *github.Client, update dateUpdate) error {
