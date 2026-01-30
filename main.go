@@ -152,7 +152,11 @@ func run(cmd *cobra.Command, args []string) error {
 	for _, u := range updates {
 		fmt.Printf("  %s #%d %s\n", u.repoKey, u.issueNum, u.name)
 		if u.clearDates {
-			fmt.Println("       (clearing dates - task is closed or on hold)")
+			if u.clearReason == "closed" {
+				fmt.Println("       (clearing dates and estimates - task is closed)")
+			} else {
+				fmt.Println("       (clearing dates - task is on hold)")
+			}
 		} else {
 			if !u.expectedStart.IsZero() {
 				fmt.Printf("       Expected Start: %s\n", u.expectedStart.Format("2006-01-02"))
@@ -210,6 +214,7 @@ type issueWithProject struct {
 	order              int
 	schedulingStatus   string // "On Hold", etc. from Scheduling Status field
 	hasSchedulingDates bool   // true if any scheduling date fields are set
+	hasEstimates       bool   // true if Low Estimate or High Estimate are set
 }
 
 type dateUpdate struct {
@@ -222,7 +227,8 @@ type dateUpdate struct {
 	expectedStart      time.Time
 	expectedCompletion time.Time
 	completion98       time.Time
-	clearDates         bool // true if dates should be cleared (on-hold tasks)
+	clearDates         bool   // true if dates should be cleared (closed/on-hold tasks)
+	clearReason        string // "closed" or "on hold"
 }
 
 func parseGitHubURL(url string) (*urlInfo, error) {
@@ -316,27 +322,27 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 		// Extract estimates and status from custom fields
 		var lowEstimate, highEstimate float64
 		var schedulingStatus string
-		var hasSchedulingFields bool
+		var hasEstimates, hasSchedulingDates bool
 		if v, ok := item.CustomFields["Low Estimate"].(float64); ok {
 			lowEstimate = v
-			hasSchedulingFields = true
+			hasEstimates = true
 		}
 		if v, ok := item.CustomFields["High Estimate"].(float64); ok {
 			highEstimate = v
-			hasSchedulingFields = true
+			hasEstimates = true
 		}
 		if v, ok := item.CustomFields["Scheduling Status"].(string); ok {
 			schedulingStatus = v
 		}
 		// Check if any scheduling date fields are set
 		if _, ok := item.CustomFields["Expected Start"].(string); ok {
-			hasSchedulingFields = true
+			hasSchedulingDates = true
 		}
 		if _, ok := item.CustomFields["Expected Completion"].(string); ok {
-			hasSchedulingFields = true
+			hasSchedulingDates = true
 		}
 		if _, ok := item.CustomFields["98% Completion"].(string); ok {
-			hasSchedulingFields = true
+			hasSchedulingDates = true
 		}
 
 		// Build project info for this item using the project-level field IDs
@@ -370,11 +376,12 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 			highEstimate:       highEstimate,
 			order:              position,
 			schedulingStatus:   schedulingStatus,
-			hasSchedulingDates: hasSchedulingFields,
+			hasSchedulingDates: hasSchedulingDates,
+			hasEstimates:       hasEstimates,
 		}
 
-		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasFields=%v",
-			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingFields)
+		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasDates=%v, hasEstimates=%v",
+			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingDates, hasEstimates)
 		position++
 	}
 
@@ -636,19 +643,29 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 			continue
 		}
 
-		// Closed and on-hold tasks should have their dates cleared (only if they have dates set)
+		// Closed and on-hold tasks should have their scheduling fields cleared
 		if bar.Done || bar.OnHold {
-			if !iwp.hasSchedulingDates {
+			// On-hold: only clear if dates are set (estimates remain)
+			// Closed: clear if dates OR estimates are set
+			if bar.OnHold && !iwp.hasSchedulingDates {
 				continue
 			}
+			if bar.Done && !iwp.hasSchedulingDates && !iwp.hasEstimates {
+				continue
+			}
+			reason := "on hold"
+			if bar.Done {
+				reason = "closed"
+			}
 			update := dateUpdate{
-				owner:      iwp.owner,
-				repo:       iwp.repo,
-				repoKey:    fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
-				issueNum:   iwp.issueNum,
-				name:       bar.Name,
-				project:    iwp.project,
-				clearDates: true,
+				owner:       iwp.owner,
+				repo:        iwp.repo,
+				repoKey:     fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
+				issueNum:    iwp.issueNum,
+				name:        bar.Name,
+				project:     iwp.project,
+				clearDates:  true,
+				clearReason: reason,
 			}
 			updates = append(updates, update)
 			continue
@@ -677,14 +694,17 @@ func applyUpdate(client *github.Client, update dateUpdate) error {
 		return fmt.Errorf("no project info")
 	}
 
-	// Clear all scheduling fields for closed/on-hold tasks
+	// Clear scheduling fields for closed/on-hold tasks
 	if update.clearDates {
+		// Always clear date fields
 		fieldsToClean := []string{
 			"Expected Start",
 			"Expected Completion",
 			"98% Completion",
-			"Low Estimate",
-			"High Estimate",
+		}
+		// Only clear estimates if closed (not on hold)
+		if update.clearReason == "closed" {
+			fieldsToClean = append(fieldsToClean, "Low Estimate", "High Estimate")
 		}
 		for _, fieldName := range fieldsToClean {
 			if fieldID, ok := update.project.FieldIDs[fieldName]; ok {

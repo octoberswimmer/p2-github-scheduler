@@ -327,12 +327,64 @@ func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 	if !onHoldUpdate.clearDates {
 		t.Error("expected on-hold task to have clearDates=true")
 	}
+	if onHoldUpdate.clearReason != "on hold" {
+		t.Errorf("expected on-hold task clearReason=%q, got %q", "on hold", onHoldUpdate.clearReason)
+	}
 
 	if activeUpdate == nil {
 		t.Fatal("expected to find active task update")
 	}
 	if activeUpdate.clearDates {
 		t.Error("expected active task to have clearDates=false")
+	}
+}
+
+func TestPrepareUpdates_OnHoldWithOnlyEstimatesSkipped(t *testing.T) {
+	// On-hold tasks should only be included if they have dates set
+	// Estimates alone should not trigger clearing (we keep estimates for on-hold)
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+			"Low Estimate":        "field-4",
+			"High Estimate":       "field-5",
+		},
+	}
+
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:            "owner",
+			repo:             "repo",
+			issueNum:         1,
+			title:            "On Hold With Only Estimates",
+			state:            "open",
+			schedulingStatus: "On Hold",
+			project:          projectInfo,
+			lowEstimate:      2,
+			highEstimate:     8,
+			hasEstimates:     true,
+			// hasSchedulingDates is false - no dates set
+		},
+	}
+
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:     "owner/repo#1",
+				Name:   "On Hold With Only Estimates",
+				OnHold: true,
+			},
+		},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 0 updates - on-hold with only estimates should be skipped
+	if len(updates) != 0 {
+		t.Fatalf("expected 0 updates for on-hold task with only estimates, got %d", len(updates))
 	}
 }
 
@@ -451,6 +503,9 @@ func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
 	if !closedUpdate.clearDates {
 		t.Error("expected closed task to have clearDates=true")
 	}
+	if closedUpdate.clearReason != "closed" {
+		t.Errorf("expected closed task clearReason=%q, got %q", "closed", closedUpdate.clearReason)
+	}
 
 	if openUpdate == nil {
 		t.Fatal("expected to find open task update")
@@ -537,15 +592,15 @@ func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
 	// Create mock issues - one closed with estimates (no dates), one open
 	issues := map[string]issueWithProject{
 		"github.com/owner/repo/issues/1": {
-			owner:              "owner",
-			repo:               "repo",
-			issueNum:           1,
-			title:              "Closed Task With Estimates",
-			state:              "closed",
-			project:            projectInfo,
-			lowEstimate:        2,
-			highEstimate:       8,
-			hasSchedulingDates: true, // has estimates to clear
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Closed Task With Estimates",
+			state:        "closed",
+			project:      projectInfo,
+			lowEstimate:  2,
+			highEstimate: 8,
+			hasEstimates: true, // has estimates to clear (no dates)
 		},
 		"github.com/owner/repo/issues/2": {
 			owner:    "owner",
@@ -593,6 +648,9 @@ func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
 	}
 	if !closedUpdate.clearDates {
 		t.Error("expected closed task with estimates to have clearDates=true")
+	}
+	if closedUpdate.clearReason != "closed" {
+		t.Errorf("expected closed task clearReason=%q, got %q", "closed", closedUpdate.clearReason)
 	}
 }
 
