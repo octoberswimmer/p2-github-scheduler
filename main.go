@@ -284,6 +284,16 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 	}
 
 	gqlClient := github.NewGraphQLClient(accessToken)
+
+	// Fetch project field IDs once (instead of per-issue)
+	projectFields, err := gqlClient.GetProjectFields(project)
+	if err != nil {
+		logrus.Warnf("Failed to fetch project fields: %v", err)
+		// Continue without field IDs - updates won't work but we can still schedule
+	} else {
+		logrus.Debugf("Project fields: %v", projectFields.FieldIDs)
+	}
+
 	items, err := gqlClient.GetProjectItems(project)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch project items: %w", err)
@@ -306,34 +316,38 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 		// Extract estimates and status from custom fields
 		var lowEstimate, highEstimate float64
 		var schedulingStatus string
-		var hasSchedulingDates bool
+		var hasSchedulingFields bool
 		if v, ok := item.CustomFields["Low Estimate"].(float64); ok {
 			lowEstimate = v
+			hasSchedulingFields = true
 		}
 		if v, ok := item.CustomFields["High Estimate"].(float64); ok {
 			highEstimate = v
+			hasSchedulingFields = true
 		}
 		if v, ok := item.CustomFields["Scheduling Status"].(string); ok {
 			schedulingStatus = v
 		}
 		// Check if any scheduling date fields are set
 		if _, ok := item.CustomFields["Expected Start"].(string); ok {
-			hasSchedulingDates = true
+			hasSchedulingFields = true
 		}
 		if _, ok := item.CustomFields["Expected Completion"].(string); ok {
-			hasSchedulingDates = true
+			hasSchedulingFields = true
 		}
 		if _, ok := item.CustomFields["98% Completion"].(string); ok {
-			hasSchedulingDates = true
+			hasSchedulingFields = true
 		}
 
-		// Get project info for this item by fetching via GraphQL
-		// We need the field IDs for updates
-		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: item.RepoOwner, Name: item.RepoName})
-		issueData, err := client.GetIssueWithCustomFields(item.IssueNumber)
+		// Build project info for this item using the project-level field IDs
 		var projectInfo *github.ProjectItemInfo
-		if err == nil {
-			projectInfo = github.ExtractProjectInfo(issueData)
+		if projectFields != nil {
+			projectInfo = &github.ProjectItemInfo{
+				ProjectID:           projectFields.ProjectID,
+				ItemID:              item.ID,
+				FieldIDs:            projectFields.FieldIDs,
+				SingleSelectOptions: projectFields.SingleSelectOptions,
+			}
 		}
 
 		var assignee string
@@ -356,11 +370,11 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 			highEstimate:       highEstimate,
 			order:              position,
 			schedulingStatus:   schedulingStatus,
-			hasSchedulingDates: hasSchedulingDates,
+			hasSchedulingDates: hasSchedulingFields,
 		}
 
-		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, labels=%v",
-			ref, lowEstimate, highEstimate, position, schedulingStatus, item.Labels)
+		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasFields=%v",
+			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingFields)
 		position++
 	}
 
@@ -663,21 +677,20 @@ func applyUpdate(client *github.Client, update dateUpdate) error {
 		return fmt.Errorf("no project info")
 	}
 
-	// Clear dates for on-hold tasks
+	// Clear all scheduling fields for closed/on-hold tasks
 	if update.clearDates {
-		if fieldID, ok := update.project.FieldIDs["Expected Start"]; ok {
-			if err := client.ClearDateField(update.project.ProjectID, update.project.ItemID, fieldID); err != nil {
-				logrus.Warnf("Failed to clear Expected Start for #%d: %v", update.issueNum, err)
-			}
+		fieldsToClean := []string{
+			"Expected Start",
+			"Expected Completion",
+			"98% Completion",
+			"Low Estimate",
+			"High Estimate",
 		}
-		if fieldID, ok := update.project.FieldIDs["Expected Completion"]; ok {
-			if err := client.ClearDateField(update.project.ProjectID, update.project.ItemID, fieldID); err != nil {
-				logrus.Warnf("Failed to clear Expected Completion for #%d: %v", update.issueNum, err)
-			}
-		}
-		if fieldID, ok := update.project.FieldIDs["98% Completion"]; ok {
-			if err := client.ClearDateField(update.project.ProjectID, update.project.ItemID, fieldID); err != nil {
-				logrus.Warnf("Failed to clear 98%% Completion for #%d: %v", update.issueNum, err)
+		for _, fieldName := range fieldsToClean {
+			if fieldID, ok := update.project.FieldIDs[fieldName]; ok {
+				if err := client.ClearField(update.project.ProjectID, update.project.ItemID, fieldID); err != nil {
+					logrus.Warnf("Failed to clear %s for #%d: %v", fieldName, update.issueNum, err)
+				}
 			}
 		}
 		return nil

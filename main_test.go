@@ -519,3 +519,123 @@ func TestPrepareUpdates_ClosedTasksWithoutDatesSkipped(t *testing.T) {
 		t.Errorf("expected open task update, got issue #%d", updates[0].issueNum)
 	}
 }
+
+func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
+	// Create a mock project info with all scheduling fields
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+			"Low Estimate":        "field-4",
+			"High Estimate":       "field-5",
+		},
+	}
+
+	// Create mock issues - one closed with estimates (no dates), one open
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "Closed Task With Estimates",
+			state:              "closed",
+			project:            projectInfo,
+			lowEstimate:        2,
+			highEstimate:       8,
+			hasSchedulingDates: true, // has estimates to clear
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Open Task",
+			state:    "open",
+			project:  projectInfo,
+		},
+	}
+
+	// Create mock gantt data with both tasks
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:   "owner/repo#1",
+				Name: "Closed Task With Estimates",
+				Done: true,
+			},
+			{
+				ID:   "owner/repo#2",
+				Name: "Open Task",
+			},
+		},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 2 updates - closed task with estimates should be included
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+
+	// Find the closed task update
+	var closedUpdate *dateUpdate
+	for i := range updates {
+		if updates[i].issueNum == 1 {
+			closedUpdate = &updates[i]
+			break
+		}
+	}
+
+	if closedUpdate == nil {
+		t.Fatal("expected to find closed task update")
+	}
+	if !closedUpdate.clearDates {
+		t.Error("expected closed task with estimates to have clearDates=true")
+	}
+}
+
+func TestProjectInfoFromGetProjectFields(t *testing.T) {
+	// Test that ProjectItemInfo can be constructed with item ID from GetProjectItems
+	// and field IDs from GetProjectFields
+	projectFields := &github.ProjectItemInfo{
+		ProjectID: "proj-123",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+			"Low Estimate":        "field-4",
+			"High Estimate":       "field-5",
+		},
+		SingleSelectOptions: map[string]map[string]string{
+			"Scheduling Status": {
+				"On Hold": "opt-1",
+				"Active":  "opt-2",
+			},
+		},
+	}
+
+	// Simulate what fetchProjectItems does: combine project fields with item ID
+	itemID := "item-456"
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID:           projectFields.ProjectID,
+		ItemID:              itemID,
+		FieldIDs:            projectFields.FieldIDs,
+		SingleSelectOptions: projectFields.SingleSelectOptions,
+	}
+
+	// Verify all fields are accessible
+	if projectInfo.ProjectID != "proj-123" {
+		t.Errorf("ProjectID = %q, want %q", projectInfo.ProjectID, "proj-123")
+	}
+	if projectInfo.ItemID != "item-456" {
+		t.Errorf("ItemID = %q, want %q", projectInfo.ItemID, "item-456")
+	}
+	if len(projectInfo.FieldIDs) != 5 {
+		t.Errorf("FieldIDs has %d entries, want 5", len(projectInfo.FieldIDs))
+	}
+	if projectInfo.FieldIDs["Low Estimate"] != "field-4" {
+		t.Errorf("Low Estimate field ID = %q, want %q", projectInfo.FieldIDs["Low Estimate"], "field-4")
+	}
+}
