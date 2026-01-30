@@ -255,6 +255,41 @@ func TestIssuesToTasks_OnHoldViaSchedulingStatus(t *testing.T) {
 	}
 }
 
+func TestIssuesToTasks_DraftIssuesAreOnHold(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Regular Issue",
+			state:    "open",
+		},
+		"draft:PVTI_abc123": {
+			title:         "Draft Issue",
+			isDraft:       true,
+			projectItemID: "PVTI_abc123",
+		},
+	}
+
+	tasks, _ := issuesToTasks(issues)
+
+	// Find tasks by title
+	taskMap := make(map[string]planner.Task)
+	for _, t := range tasks {
+		taskMap[t.Name] = t
+	}
+
+	if taskMap["Regular Issue"].OnHold {
+		t.Error("expected 'Regular Issue' to have OnHold=false")
+	}
+	if !taskMap["Draft Issue"].OnHold {
+		t.Error("expected 'Draft Issue' to have OnHold=true")
+	}
+	if taskMap["Draft Issue"].ID != "draft:PVTI_abc123" {
+		t.Errorf("expected draft issue ID 'draft:PVTI_abc123', got %q", taskMap["Draft Issue"].ID)
+	}
+}
+
 func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 	// Create a mock project info
 	projectInfo := &github.ProjectItemInfo{
@@ -429,6 +464,215 @@ func TestIssuesToTasks_PreservesOrder(t *testing.T) {
 		if task.Name != expectedOrder[i] {
 			t.Errorf("task %d: expected name %q, got %q", i, expectedOrder[i], task.Name)
 		}
+	}
+}
+
+func TestIssuesToTasks_SkipsInaccessibleDependencies(t *testing.T) {
+	// Task 2 depends on task 1 (accessible) and task 3 (inaccessible - not in issues map)
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Blocker Task",
+			state:    "open",
+			order:    0,
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Blocked Task",
+			state:    "open",
+			order:    1,
+			blockedBy: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 1},     // accessible
+				{Owner: "other", Repo: "private", Number: 99}, // inaccessible
+			},
+		},
+	}
+
+	tasks, _ := issuesToTasks(issues)
+
+	// Find the blocked task
+	var blockedTask *planner.Task
+	for i := range tasks {
+		if tasks[i].Name == "Blocked Task" {
+			blockedTask = &tasks[i]
+			break
+		}
+	}
+
+	if blockedTask == nil {
+		t.Fatal("Blocked Task not found")
+	}
+
+	// Should only have one dependency (the accessible one)
+	if len(blockedTask.DependsOn) != 1 {
+		t.Errorf("expected 1 dependency, got %d: %v", len(blockedTask.DependsOn), blockedTask.DependsOn)
+	}
+
+	if len(blockedTask.DependsOn) > 0 && blockedTask.DependsOn[0] != "owner/repo#1" {
+		t.Errorf("expected dependency on 'owner/repo#1', got %q", blockedTask.DependsOn[0])
+	}
+}
+
+func TestIssuesToTasks_UnassignedTasksGetDefaultUser(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Assigned Task",
+			state:    "open",
+			assignee: "cwarden",
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Unassigned Task",
+			state:    "open",
+			// no assignee
+		},
+	}
+
+	tasks, users := issuesToTasks(issues)
+
+	// Find tasks by title
+	taskMap := make(map[string]planner.Task)
+	for _, task := range tasks {
+		taskMap[task.Name] = task
+	}
+
+	// Assigned task should have the assignee
+	if taskMap["Assigned Task"].User != "cwarden" {
+		t.Errorf("expected assigned task to have User='cwarden', got %q", taskMap["Assigned Task"].User)
+	}
+
+	// Unassigned task should have "unassigned" user
+	if taskMap["Unassigned Task"].User != "unassigned" {
+		t.Errorf("expected unassigned task to have User='unassigned', got %q", taskMap["Unassigned Task"].User)
+	}
+
+	// Users slice should include both cwarden and unassigned
+	userMap := make(map[string]bool)
+	for _, u := range users {
+		userMap[u.ID] = true
+	}
+	if !userMap["cwarden"] {
+		t.Error("expected users to include 'cwarden'")
+	}
+	if !userMap["unassigned"] {
+		t.Error("expected users to include 'unassigned'")
+	}
+}
+
+func TestBuildReverseDependencies_BlockingCreatesBlockedBy(t *testing.T) {
+	// Issue A blocks issue B - B should get A added to its blockedBy
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Blocker Task",
+			state:    "open",
+			blocking: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 2}, // blocks issue 2
+			},
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Blocked Task",
+			state:    "open",
+			// blockedBy is empty initially
+		},
+	}
+
+	buildReverseDependencies(issues)
+
+	blockedIssue := issues["github.com/owner/repo/issues/2"]
+	if len(blockedIssue.blockedBy) != 1 {
+		t.Errorf("expected 1 blockedBy entry, got %d", len(blockedIssue.blockedBy))
+	}
+
+	if len(blockedIssue.blockedBy) > 0 {
+		ref := blockedIssue.blockedBy[0]
+		if ref.Owner != "owner" || ref.Repo != "repo" || ref.Number != 1 {
+			t.Errorf("expected blockedBy to reference owner/repo#1, got %s/%s#%d", ref.Owner, ref.Repo, ref.Number)
+		}
+	}
+}
+
+func TestBuildReverseDependencies_CrossRepoBlocking(t *testing.T) {
+	// Issue in repo A blocks issue in repo B
+	issues := map[string]issueWithProject{
+		"github.com/owner/repoA/issues/1": {
+			owner:    "owner",
+			repo:     "repoA",
+			issueNum: 1,
+			title:    "Blocker in Repo A",
+			state:    "open",
+			blocking: []github.IssueRef{
+				{Owner: "owner", Repo: "repoB", Number: 1}, // blocks issue in repo B
+			},
+		},
+		"github.com/owner/repoB/issues/1": {
+			owner:    "owner",
+			repo:     "repoB",
+			issueNum: 1,
+			title:    "Blocked in Repo B",
+			state:    "open",
+		},
+	}
+
+	buildReverseDependencies(issues)
+
+	blockedIssue := issues["github.com/owner/repoB/issues/1"]
+	if len(blockedIssue.blockedBy) != 1 {
+		t.Errorf("expected 1 blockedBy entry for cross-repo dependency, got %d", len(blockedIssue.blockedBy))
+	}
+
+	if len(blockedIssue.blockedBy) > 0 {
+		ref := blockedIssue.blockedBy[0]
+		if ref.Owner != "owner" || ref.Repo != "repoA" || ref.Number != 1 {
+			t.Errorf("expected blockedBy to reference owner/repoA#1, got %s/%s#%d", ref.Owner, ref.Repo, ref.Number)
+		}
+	}
+}
+
+func TestBuildReverseDependencies_NoDuplicates(t *testing.T) {
+	// Issue already has blockedBy set - shouldn't add duplicate
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "Blocker Task",
+			state:    "open",
+			blocking: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 2},
+			},
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Blocked Task",
+			state:    "open",
+			blockedBy: []github.IssueRef{
+				{Owner: "owner", Repo: "repo", Number: 1}, // already has the dependency
+			},
+		},
+	}
+
+	buildReverseDependencies(issues)
+
+	blockedIssue := issues["github.com/owner/repo/issues/2"]
+	if len(blockedIssue.blockedBy) != 1 {
+		t.Errorf("expected 1 blockedBy entry (no duplicate), got %d", len(blockedIssue.blockedBy))
 	}
 }
 

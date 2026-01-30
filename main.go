@@ -133,6 +133,11 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Run the scheduler
 	fmt.Println("Running scheduler...")
+	for _, t := range tasks {
+		if len(t.DependsOn) > 0 {
+			logrus.Debugf("Task %s (user=%q, done=%v, onhold=%v) depends on: %v", t.ID, t.User, t.Done, t.OnHold, t.DependsOn)
+		}
+	}
 	base := time.Now()
 	entries := planner.ScheduleWithUsers(tasks, users)
 
@@ -213,9 +218,13 @@ type issueWithProject struct {
 	lowEstimate        float64
 	highEstimate       float64
 	order              int
-	schedulingStatus   string // "On Hold", etc. from Scheduling Status field
-	hasSchedulingDates bool   // true if any scheduling date fields are set
-	hasEstimates       bool   // true if Low Estimate or High Estimate are set
+	schedulingStatus   string            // "On Hold", etc. from Scheduling Status field
+	hasSchedulingDates bool              // true if any scheduling date fields are set
+	hasEstimates       bool              // true if Low Estimate or High Estimate are set
+	blockedBy          []github.IssueRef // issues that block this one
+	blocking           []github.IssueRef // issues that this one blocks
+	isDraft            bool              // true if this is a draft issue
+	projectItemID      string            // project item node ID (used as ID for drafts)
 }
 
 type dateUpdate struct {
@@ -313,12 +322,24 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 	// Track position for ordering (GraphQL returns items in display order)
 	position := 0
 	for _, item := range items {
-		// Skip non-issues (PRs, draft issues)
-		if item.ContentType != "ISSUE" && item.IssueNumber == 0 {
+		var ref string
+		var isDraft bool
+
+		if item.ContentType == "ISSUE" {
+			ref = fmt.Sprintf("github.com/%s/%s/issues/%d", item.RepoOwner, item.RepoName, item.IssueNumber)
+		} else if item.ContentType == "DRAFT_ISSUE" {
+			// Draft issues use project item ID as ref and are treated as on-hold
+			ref = fmt.Sprintf("draft:%s", item.ID)
+			isDraft = true
+			logrus.Debugf("Including draft issue as on-hold: %s", item.Title)
+		} else if item.Title != "" {
+			// Item has a title but no content - likely from an inaccessible repo
+			logrus.Warnf("Skipping inaccessible item %q: grant access to its repository", item.Title)
+			continue
+		} else {
+			// Skip items with no useful content
 			continue
 		}
-
-		ref := fmt.Sprintf("github.com/%s/%s/issues/%d", item.RepoOwner, item.RepoName, item.IssueNumber)
 
 		// Extract estimates and status from custom fields
 		var lowEstimate, highEstimate float64
@@ -379,12 +400,26 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 			schedulingStatus:   schedulingStatus,
 			hasSchedulingDates: hasSchedulingDates,
 			hasEstimates:       hasEstimates,
+			blockedBy:          item.BlockedBy,
+			blocking:           item.Blocking,
+			isDraft:            isDraft,
+			projectItemID:      item.ID,
 		}
 
-		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasDates=%v, hasEstimates=%v",
-			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingDates, hasEstimates)
+		var blockedByRefs []string
+		for _, b := range item.BlockedBy {
+			blockedByRefs = append(blockedByRefs, fmt.Sprintf("%s/%s#%d", b.Owner, b.Repo, b.Number))
+		}
+		var blockingRefs []string
+		for _, b := range item.Blocking {
+			blockingRefs = append(blockingRefs, fmt.Sprintf("%s/%s#%d", b.Owner, b.Repo, b.Number))
+		}
+		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasDates=%v, hasEstimates=%v, blockedBy=%v, blocking=%v",
+			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingDates, hasEstimates, blockedByRefs, blockingRefs)
 		position++
 	}
+
+	buildReverseDependencies(allIssues)
 
 	return allIssues, nil
 }
@@ -527,6 +562,35 @@ func extractSchedulingStatus(issueData map[string]interface{}) string {
 	return ""
 }
 
+// buildReverseDependencies adds blockedBy entries based on blocking relationships.
+// If issue A is blocking issue B, then B's blockedBy should include A.
+func buildReverseDependencies(issues map[string]issueWithProject) {
+	for ref, iwp := range issues {
+		for _, blocked := range iwp.blocking {
+			blockedRef := fmt.Sprintf("github.com/%s/%s/issues/%d", blocked.Owner, blocked.Repo, blocked.Number)
+			if blockedIssue, ok := issues[blockedRef]; ok {
+				// Check if dependency already exists
+				alreadyExists := false
+				for _, existing := range blockedIssue.blockedBy {
+					if existing.Owner == iwp.owner && existing.Repo == iwp.repo && existing.Number == iwp.issueNum {
+						alreadyExists = true
+						break
+					}
+				}
+				if !alreadyExists {
+					blockedIssue.blockedBy = append(blockedIssue.blockedBy, github.IssueRef{
+						Owner:  iwp.owner,
+						Repo:   iwp.repo,
+						Number: iwp.issueNum,
+					})
+					issues[blockedRef] = blockedIssue
+					logrus.Debugf("Added reverse dependency: %s blocked by %s (from blocking field)", blockedRef, ref)
+				}
+			}
+		}
+	}
+}
+
 func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfile.User) {
 	gen := lseq.NewGenerator("scheduler")
 	userSet := make(map[string]bool)
@@ -548,8 +612,17 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 	for i, ri := range sortedIssues {
 		ref := ri.ref
 		iwp := ri.iwp
+
+		// Determine task ID based on whether it's a draft or regular issue
+		var taskID string
+		if iwp.isDraft {
+			taskID = fmt.Sprintf("draft:%s", iwp.projectItemID)
+		} else {
+			taskID = fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
+		}
+
 		task := planner.Task{
-			ID:           fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum),
+			ID:           taskID,
 			Sequence:     lseq.SequentialString(i, "scheduler"),
 			Name:         iwp.title,
 			Ref:          []string{ref},
@@ -564,10 +637,18 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 			task.EstimateHigh = 4
 		}
 
-		// Extract assignee
+		// Extract assignee (use "unassigned" for tasks with no assignee)
 		if iwp.assignee != "" {
 			task.User = iwp.assignee
 			userSet[iwp.assignee] = true
+		} else {
+			task.User = "unassigned"
+			userSet["unassigned"] = true
+		}
+
+		// Draft issues are always on-hold
+		if iwp.isDraft {
+			task.OnHold = true
 		}
 
 		// Check for on-hold via Scheduling Status field
@@ -578,6 +659,18 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 		// Extract milestone as package
 		if iwp.milestone != "" {
 			task.PackageID = iwp.milestone
+		}
+
+		// Map blockedBy to DependsOn (only if the blocking task exists in our data)
+		for _, blocker := range iwp.blockedBy {
+			depID := fmt.Sprintf("%s/%s#%d", blocker.Owner, blocker.Repo, blocker.Number)
+			issueKey := fmt.Sprintf("github.com/%s/%s/issues/%d", blocker.Owner, blocker.Repo, blocker.Number)
+			if _, exists := issues[issueKey]; exists {
+				task.DependsOn = append(task.DependsOn, depID)
+				logrus.Debugf("Added dependency: %s depends on %s", task.ID, depID)
+			} else {
+				logrus.Warnf("Skipping dependency %s for %s: task not accessible (grant access to %s/%s)", depID, task.ID, blocker.Owner, blocker.Repo)
+			}
 		}
 
 		tasks = append(tasks, task)
