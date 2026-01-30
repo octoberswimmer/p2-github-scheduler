@@ -755,6 +755,195 @@ func TestPrepareUpdates_ClosedDetectedFromGitHubNotGantt(t *testing.T) {
 	}
 }
 
+func TestPrepareUpdates_DifferentReposSameIssueNumber(t *testing.T) {
+	// Bug fix test: issues from different repos with the same issue number
+	// should be tracked separately. Previously, closing aer-dist#2 would
+	// incorrectly mark a2b#2 as processed.
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	// Two issues from different repos with same issue number
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo-a/issues/2": {
+			owner:              "owner",
+			repo:               "repo-a",
+			issueNum:           2,
+			title:              "Closed Task In Repo A",
+			state:              "closed",
+			project:            projectInfo,
+			hasSchedulingDates: true,
+		},
+		"github.com/owner/repo-b/issues/2": {
+			owner:    "owner",
+			repo:     "repo-b",
+			issueNum: 2,
+			title:    "Open Task In Repo B",
+			state:    "open",
+			project:  projectInfo,
+		},
+	}
+
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:   "owner/repo-a#2",
+				Name: "Closed Task In Repo A",
+				Done: true,
+			},
+			{
+				ID:   "owner/repo-b#2",
+				Name: "Open Task In Repo B",
+			},
+		},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 2 updates: one to clear dates for closed task,
+	// one to set dates for open task
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+
+	// Find updates by repo
+	var repoAUpdate, repoBUpdate *dateUpdate
+	for i := range updates {
+		if updates[i].repo == "repo-a" {
+			repoAUpdate = &updates[i]
+		} else if updates[i].repo == "repo-b" {
+			repoBUpdate = &updates[i]
+		}
+	}
+
+	if repoAUpdate == nil {
+		t.Fatal("expected to find repo-a update")
+	}
+	if !repoAUpdate.clearDates {
+		t.Error("repo-a task should have clearDates=true (it's closed)")
+	}
+
+	if repoBUpdate == nil {
+		t.Fatal("expected to find repo-b update")
+	}
+	if repoBUpdate.clearDates {
+		t.Error("repo-b task should have clearDates=false (it's open)")
+	}
+}
+
+func TestPrepareUpdates_MultipleReposWithOverlappingIssueNumbers(t *testing.T) {
+	// More comprehensive test: multiple repos with overlapping issue numbers
+	// in various states
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	issues := map[string]issueWithProject{
+		// aer-dist repo: issues 1, 2, 4 all closed
+		"github.com/owner/aer-dist/issues/1": {
+			owner:              "owner",
+			repo:               "aer-dist",
+			issueNum:           1,
+			title:              "aer-dist #1 (closed)",
+			state:              "closed",
+			project:            projectInfo,
+			hasSchedulingDates: true,
+		},
+		"github.com/owner/aer-dist/issues/2": {
+			owner:              "owner",
+			repo:               "aer-dist",
+			issueNum:           2,
+			title:              "aer-dist #2 (closed)",
+			state:              "closed",
+			project:            projectInfo,
+			hasSchedulingDates: true,
+		},
+		"github.com/owner/aer-dist/issues/4": {
+			owner:              "owner",
+			repo:               "aer-dist",
+			issueNum:           4,
+			title:              "aer-dist #4 (closed)",
+			state:              "closed",
+			project:            projectInfo,
+			hasSchedulingDates: true,
+		},
+		// a2b repo: issues 2, 4 open
+		"github.com/owner/a2b/issues/2": {
+			owner:    "owner",
+			repo:     "a2b",
+			issueNum: 2,
+			title:    "a2b #2 (open)",
+			state:    "open",
+			project:  projectInfo,
+		},
+		"github.com/owner/a2b/issues/4": {
+			owner:    "owner",
+			repo:     "a2b",
+			issueNum: 4,
+			title:    "a2b #4 (open)",
+			state:    "open",
+			project:  projectInfo,
+		},
+	}
+
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{ID: "owner/aer-dist#1", Name: "aer-dist #1 (closed)", Done: true},
+			{ID: "owner/aer-dist#2", Name: "aer-dist #2 (closed)", Done: true},
+			{ID: "owner/aer-dist#4", Name: "aer-dist #4 (closed)", Done: true},
+			{ID: "owner/a2b#2", Name: "a2b #2 (open)"},
+			{ID: "owner/a2b#4", Name: "a2b #4 (open)"},
+		},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 5 updates total
+	if len(updates) != 5 {
+		t.Fatalf("expected 5 updates, got %d", len(updates))
+	}
+
+	// Count updates by type
+	clearCount := 0
+	setCount := 0
+	for _, u := range updates {
+		if u.clearDates {
+			clearCount++
+		} else {
+			setCount++
+		}
+	}
+
+	// 3 closed tasks should have clearDates=true
+	if clearCount != 3 {
+		t.Errorf("expected 3 updates with clearDates=true, got %d", clearCount)
+	}
+
+	// 2 open tasks should have clearDates=false
+	if setCount != 2 {
+		t.Errorf("expected 2 updates with clearDates=false, got %d", setCount)
+	}
+
+	// Verify a2b tasks specifically are not marked for clearing
+	for _, u := range updates {
+		if u.repo == "a2b" && u.clearDates {
+			t.Errorf("a2b #%d should not have clearDates=true", u.issueNum)
+		}
+	}
+}
+
 func TestProjectInfoFromGetProjectFields(t *testing.T) {
 	// Test that ProjectItemInfo can be constructed with item ID from GetProjectItems
 	// and field IDs from GetProjectFields

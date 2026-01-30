@@ -620,7 +620,8 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 	var updates []dateUpdate
 
 	// Track which issues we've processed for clearing
-	processed := make(map[int]bool)
+	// Use full task ID to avoid collisions between repos with same issue numbers
+	processed := make(map[string]bool)
 
 	// First pass: check all issues directly for on-hold or closed status
 	// This doesn't depend on the scheduler - just GitHub data
@@ -629,13 +630,15 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 			continue
 		}
 
+		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
+
 		// Check for on-hold via Scheduling Status field
 		isOnHold := iwp.schedulingStatus == "On Hold"
 		isClosed := strings.EqualFold(iwp.state, "closed")
 
 		if isOnHold || isClosed {
 			// Mark as processed so second pass skips it
-			processed[iwp.issueNum] = true
+			processed[taskID] = true
 
 			// On-hold: only clear if dates are set (estimates remain)
 			// Closed: clear if dates OR estimates are set
@@ -688,7 +691,7 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 		}
 
 		// Skip if already processed (on-hold or closed)
-		if processed[iwp.issueNum] {
+		if processed[bar.ID] {
 			continue
 		}
 
