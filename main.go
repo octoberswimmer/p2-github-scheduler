@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -134,7 +135,7 @@ func run(cmd *cobra.Command, args []string) error {
 	base := time.Now()
 	entries := planner.ScheduleWithUsers(tasks, users)
 
-	ganttData, err := planner.ComputeGanttData(entries, tasks, false, base, users)
+	ganttData, err := planner.ComputeGanttData(entries, tasks, true, base, users)
 	if err != nil {
 		return fmt.Errorf("scheduling failed: %w", err)
 	}
@@ -194,20 +195,21 @@ type urlInfo struct {
 }
 
 type issueWithProject struct {
-	owner            string
-	repo             string
-	issueNum         int
-	title            string
-	body             string
-	state            string
-	assignee         string
-	labels           []string
-	milestone        string
-	project          *github.ProjectItemInfo
-	lowEstimate      float64
-	highEstimate     float64
-	order            int
-	schedulingStatus string // "On Hold", etc. from GitHub Project field
+	owner              string
+	repo               string
+	issueNum           int
+	title              string
+	body               string
+	state              string
+	assignee           string
+	labels             []string
+	milestone          string
+	project            *github.ProjectItemInfo
+	lowEstimate        float64
+	highEstimate       float64
+	order              int
+	schedulingStatus   string // "On Hold", etc. from Scheduling Status field
+	hasSchedulingDates bool   // true if any scheduling date fields are set
 }
 
 type dateUpdate struct {
@@ -291,6 +293,8 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 
 	allIssues := make(map[string]issueWithProject)
 
+	// Track position for ordering (GraphQL returns items in display order)
+	position := 0
 	for _, item := range items {
 		// Skip non-issues (PRs, draft issues)
 		if item.ContentType != "ISSUE" && item.IssueNumber == 0 {
@@ -301,19 +305,26 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 
 		// Extract estimates and status from custom fields
 		var lowEstimate, highEstimate float64
-		var order int
 		var schedulingStatus string
+		var hasSchedulingDates bool
 		if v, ok := item.CustomFields["Low Estimate"].(float64); ok {
 			lowEstimate = v
 		}
 		if v, ok := item.CustomFields["High Estimate"].(float64); ok {
 			highEstimate = v
 		}
-		if v, ok := item.CustomFields["Order"].(float64); ok {
-			order = int(v)
-		}
 		if v, ok := item.CustomFields["Scheduling Status"].(string); ok {
 			schedulingStatus = v
+		}
+		// Check if any scheduling date fields are set
+		if _, ok := item.CustomFields["Expected Start"].(string); ok {
+			hasSchedulingDates = true
+		}
+		if _, ok := item.CustomFields["Expected Completion"].(string); ok {
+			hasSchedulingDates = true
+		}
+		if _, ok := item.CustomFields["98% Completion"].(string); ok {
+			hasSchedulingDates = true
 		}
 
 		// Get project info for this item by fetching via GraphQL
@@ -331,24 +342,26 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 		}
 
 		allIssues[ref] = issueWithProject{
-			owner:            item.RepoOwner,
-			repo:             item.RepoName,
-			issueNum:         item.IssueNumber,
-			title:            item.Title,
-			body:             item.Body,
-			state:            item.State,
-			assignee:         assignee,
-			labels:           item.Labels,
-			milestone:        item.Milestone,
-			project:          projectInfo,
-			lowEstimate:      lowEstimate,
-			highEstimate:     highEstimate,
-			order:            order,
-			schedulingStatus: schedulingStatus,
+			owner:              item.RepoOwner,
+			repo:               item.RepoName,
+			issueNum:           item.IssueNumber,
+			title:              item.Title,
+			body:               item.Body,
+			state:              item.State,
+			assignee:           assignee,
+			labels:             item.Labels,
+			milestone:          item.Milestone,
+			project:            projectInfo,
+			lowEstimate:        lowEstimate,
+			highEstimate:       highEstimate,
+			order:              position,
+			schedulingStatus:   schedulingStatus,
+			hasSchedulingDates: hasSchedulingDates,
 		}
 
 		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, labels=%v",
-			ref, lowEstimate, highEstimate, order, schedulingStatus, item.Labels)
+			ref, lowEstimate, highEstimate, position, schedulingStatus, item.Labels)
+		position++
 	}
 
 	return allIssues, nil
@@ -497,8 +510,22 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 	userSet := make(map[string]bool)
 	var tasks []planner.Task
 
-	i := 0
+	// Convert map to slice and sort by order to preserve GitHub Project ordering
+	type refIssue struct {
+		ref string
+		iwp issueWithProject
+	}
+	sortedIssues := make([]refIssue, 0, len(issues))
 	for ref, iwp := range issues {
+		sortedIssues = append(sortedIssues, refIssue{ref: ref, iwp: iwp})
+	}
+	sort.Slice(sortedIssues, func(i, j int) bool {
+		return sortedIssues[i].iwp.order < sortedIssues[j].iwp.order
+	})
+
+	for i, ri := range sortedIssues {
+		ref := ri.ref
+		iwp := ri.iwp
 		task := planner.Task{
 			ID:           fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum),
 			Sequence:     lseq.SequentialString(i, "scheduler"),
@@ -532,7 +559,6 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 		}
 
 		tasks = append(tasks, task)
-		i++
 	}
 
 	// Assign sequences properly
@@ -596,8 +622,11 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 			continue
 		}
 
-		// Closed and on-hold tasks should have their dates cleared
+		// Closed and on-hold tasks should have their dates cleared (only if they have dates set)
 		if bar.Done || bar.OnHold {
+			if !iwp.hasSchedulingDates {
+				continue
+			}
 			update := dateUpdate{
 				owner:      iwp.owner,
 				repo:       iwp.repo,

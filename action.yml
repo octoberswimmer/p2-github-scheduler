@@ -16,6 +16,10 @@ inputs:
     description: 'Show changes without applying them'
     required: false
     default: 'false'
+  timezone:
+    description: 'Timezone for scheduling (e.g. America/New_York, Europe/London). Defaults to UTC.'
+    required: false
+    default: 'UTC'
   version:
     description: 'Release tag of p2-github-scheduler to install (e.g. v1.0.0). Use "latest" to resolve dynamically.'
     required: false
@@ -75,6 +79,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+        TZ: ${{ inputs.timezone }}
       run: |
         GITHUB_URL="${{ inputs.github-url }}"
         if [ -z "$GITHUB_URL" ]; then

@@ -267,16 +267,17 @@ func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 		},
 	}
 
-	// Create mock issues - one on-hold, one active
+	// Create mock issues - one on-hold with dates, one active
 	issues := map[string]issueWithProject{
 		"github.com/owner/repo/issues/1": {
-			owner:            "owner",
-			repo:             "repo",
-			issueNum:         1,
-			title:            "On Hold Task",
-			state:            "open",
-			schedulingStatus: "On Hold",
-			project:          projectInfo,
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "On Hold Task",
+			state:              "open",
+			schedulingStatus:   "On Hold",
+			project:            projectInfo,
+			hasSchedulingDates: true,
 		},
 		"github.com/owner/repo/issues/2": {
 			owner:    "owner",
@@ -335,6 +336,50 @@ func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 	}
 }
 
+func TestIssuesToTasks_PreservesOrder(t *testing.T) {
+	// Create issues with specific order values (simulating GitHub Project order)
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/5": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 5,
+			title:    "Third Task",
+			state:    "open",
+			order:    2,
+		},
+		"github.com/owner/repo/issues/1": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 1,
+			title:    "First Task",
+			state:    "open",
+			order:    0,
+		},
+		"github.com/owner/repo/issues/10": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 10,
+			title:    "Second Task",
+			state:    "open",
+			order:    1,
+		},
+	}
+
+	tasks, _ := issuesToTasks(issues)
+
+	if len(tasks) != 3 {
+		t.Fatalf("expected 3 tasks, got %d", len(tasks))
+	}
+
+	// Tasks should be sorted by order, not by issue number or map iteration order
+	expectedOrder := []string{"First Task", "Second Task", "Third Task"}
+	for i, task := range tasks {
+		if task.Name != expectedOrder[i] {
+			t.Errorf("task %d: expected name %q, got %q", i, expectedOrder[i], task.Name)
+		}
+	}
+}
+
 func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
 	// Create a mock project info
 	projectInfo := &github.ProjectItemInfo{
@@ -347,15 +392,16 @@ func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
 		},
 	}
 
-	// Create mock issues - one closed, one open
+	// Create mock issues - one closed with dates, one open
 	issues := map[string]issueWithProject{
 		"github.com/owner/repo/issues/1": {
-			owner:    "owner",
-			repo:     "repo",
-			issueNum: 1,
-			title:    "Closed Task",
-			state:    "closed",
-			project:  projectInfo,
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "Closed Task",
+			state:              "closed",
+			project:            projectInfo,
+			hasSchedulingDates: true,
 		},
 		"github.com/owner/repo/issues/2": {
 			owner:    "owner",
@@ -411,5 +457,65 @@ func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
 	}
 	if openUpdate.clearDates {
 		t.Error("expected open task to have clearDates=false")
+	}
+}
+
+func TestPrepareUpdates_ClosedTasksWithoutDatesSkipped(t *testing.T) {
+	// Create a mock project info
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	// Create mock issues - one closed without dates, one open
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "Closed Task Without Dates",
+			state:              "closed",
+			project:            projectInfo,
+			hasSchedulingDates: false, // no dates to clear
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Open Task",
+			state:    "open",
+			project:  projectInfo,
+		},
+	}
+
+	// Create mock gantt data with both tasks
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:   "owner/repo#1",
+				Name: "Closed Task Without Dates",
+				Done: true,
+			},
+			{
+				ID:   "owner/repo#2",
+				Name: "Open Task",
+			},
+		},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have only 1 update (the open task), closed task without dates is skipped
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+
+	if updates[0].issueNum != 2 {
+		t.Errorf("expected open task update, got issue #%d", updates[0].issueNum)
 	}
 }
