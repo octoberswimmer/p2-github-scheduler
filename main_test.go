@@ -654,6 +654,107 @@ func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
 	}
 }
 
+func TestPrepareUpdates_OnHoldDetectedFromGitHubNotGantt(t *testing.T) {
+	// On-hold status should be detected from GitHub's Scheduling Status field,
+	// not from the GanttBar. This handles cases where on-hold tasks don't appear
+	// in GanttBars (e.g., tasks with no milestone/package).
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	// Issue is on-hold (via Scheduling Status) with dates set
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:              "owner",
+			repo:               "repo",
+			issueNum:           1,
+			title:              "On Hold Task With Dates",
+			state:              "open",
+			schedulingStatus:   "On Hold",
+			project:            projectInfo,
+			hasSchedulingDates: true,
+		},
+	}
+
+	// Empty GanttData - simulates on-hold task not appearing in scheduler output
+	// (e.g., because it has no milestone and no other tasks in its package)
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 1 update - on-hold task with dates should be cleared
+	// even though it's not in the GanttBars
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+
+	if updates[0].issueNum != 1 {
+		t.Errorf("expected issue #1, got #%d", updates[0].issueNum)
+	}
+	if !updates[0].clearDates {
+		t.Error("expected clearDates=true")
+	}
+	if updates[0].clearReason != "on hold" {
+		t.Errorf("expected clearReason=%q, got %q", "on hold", updates[0].clearReason)
+	}
+}
+
+func TestPrepareUpdates_ClosedDetectedFromGitHubNotGantt(t *testing.T) {
+	// Closed status should be detected from GitHub's state field,
+	// not from the GanttBar's Done field.
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+			"Low Estimate":        "field-4",
+			"High Estimate":       "field-5",
+		},
+	}
+
+	// Issue is closed with estimates set
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Closed Task With Estimates",
+			state:        "closed",
+			project:      projectInfo,
+			hasEstimates: true,
+		},
+	}
+
+	// Empty GanttData - simulates closed task not appearing in scheduler output
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{},
+	}
+
+	updates := prepareUpdates(ganttData, issues)
+
+	// Should have 1 update - closed task with estimates should be cleared
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+
+	if !updates[0].clearDates {
+		t.Error("expected clearDates=true")
+	}
+	if updates[0].clearReason != "closed" {
+		t.Errorf("expected clearReason=%q, got %q", "closed", updates[0].clearReason)
+	}
+}
+
 func TestProjectInfoFromGetProjectFields(t *testing.T) {
 	// Test that ProjectItemInfo can be constructed with item ID from GetProjectItems
 	// and field IDs from GetProjectFields

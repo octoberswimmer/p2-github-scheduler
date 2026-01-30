@@ -70,8 +70,8 @@ func run(cmd *cobra.Command, args []string) error {
 		logrus.Debug("Using GITHUB_TOKEN from environment")
 		accessToken = token
 	} else {
-		// Fall back to stored auth or device flow
-		auth, err := github.LoadStoredAuth()
+		// Fall back to stored auth (auto-refreshes if expired) or device flow
+		auth, err := github.LoadAndRefreshAuth()
 		if err != nil {
 			fmt.Println("No stored GitHub authentication found. Starting device flow...")
 			auth, err = runDeviceFlow()
@@ -80,7 +80,7 @@ func run(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Verify token
+		// Verify token (in case refresh token also expired)
 		if err := github.VerifyToken(auth.AccessToken); err != nil {
 			fmt.Println("Stored token is invalid. Starting device flow...")
 			auth, err = runDeviceFlow()
@@ -619,14 +619,58 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProject) []dateUpdate {
 	var updates []dateUpdate
 
-	// Build a map from task ID to issue
-	taskToIssue := make(map[string]issueWithProject)
-	for ref, iwp := range issues {
-		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
-		taskToIssue[taskID] = iwp
-		_ = ref // ref is stored in the issue
+	// Track which issues we've processed for clearing
+	processed := make(map[int]bool)
+
+	// First pass: check all issues directly for on-hold or closed status
+	// This doesn't depend on the scheduler - just GitHub data
+	for _, iwp := range issues {
+		if iwp.project == nil {
+			continue
+		}
+
+		// Check for on-hold via Scheduling Status field
+		isOnHold := iwp.schedulingStatus == "On Hold"
+		isClosed := strings.EqualFold(iwp.state, "closed")
+
+		if isOnHold || isClosed {
+			// Mark as processed so second pass skips it
+			processed[iwp.issueNum] = true
+
+			// On-hold: only clear if dates are set (estimates remain)
+			// Closed: clear if dates OR estimates are set
+			if isOnHold && !iwp.hasSchedulingDates {
+				continue
+			}
+			if isClosed && !iwp.hasSchedulingDates && !iwp.hasEstimates {
+				continue
+			}
+			reason := "on hold"
+			if isClosed {
+				reason = "closed"
+			}
+			update := dateUpdate{
+				owner:       iwp.owner,
+				repo:        iwp.repo,
+				repoKey:     fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
+				issueNum:    iwp.issueNum,
+				name:        iwp.title,
+				project:     iwp.project,
+				clearDates:  true,
+				clearReason: reason,
+			}
+			updates = append(updates, update)
+		}
 	}
 
+	// Build a map from task ID to issue for gantt bar lookup
+	taskToIssue := make(map[string]issueWithProject)
+	for _, iwp := range issues {
+		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
+		taskToIssue[taskID] = iwp
+	}
+
+	// Second pass: check gantt bars for active tasks that need date updates
 	for _, bar := range ganttData.Bars {
 		if bar.IsPackage {
 			continue
@@ -643,31 +687,8 @@ func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProj
 			continue
 		}
 
-		// Closed and on-hold tasks should have their scheduling fields cleared
-		if bar.Done || bar.OnHold {
-			// On-hold: only clear if dates are set (estimates remain)
-			// Closed: clear if dates OR estimates are set
-			if bar.OnHold && !iwp.hasSchedulingDates {
-				continue
-			}
-			if bar.Done && !iwp.hasSchedulingDates && !iwp.hasEstimates {
-				continue
-			}
-			reason := "on hold"
-			if bar.Done {
-				reason = "closed"
-			}
-			update := dateUpdate{
-				owner:       iwp.owner,
-				repo:        iwp.repo,
-				repoKey:     fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
-				issueNum:    iwp.issueNum,
-				name:        bar.Name,
-				project:     iwp.project,
-				clearDates:  true,
-				clearReason: reason,
-			}
-			updates = append(updates, update)
+		// Skip if already processed (on-hold or closed)
+		if processed[iwp.issueNum] {
 			continue
 		}
 
@@ -801,17 +822,17 @@ func runDeviceFlow() (*github.StoredAuth, error) {
 				return nil, fmt.Errorf("failed to verify token: %w", err)
 			}
 
-			auth := github.StoredAuth{
-				AccessToken: tokenResp.AccessToken,
-				TokenType:   tokenResp.TokenType,
-				Scope:       tokenResp.Scope,
-			}
+			// Save authentication (includes refresh token and expiration if provided)
+			auth := github.TokenResponseToStoredAuth(tokenResp)
 
 			if err := github.SaveStoredAuth(auth); err != nil {
 				return nil, fmt.Errorf("failed to save auth: %w", err)
 			}
 
 			fmt.Printf("\nAuthenticated as: %s\n", username)
+			if auth.RefreshToken != "" {
+				fmt.Println("✓ Refresh token received - session will auto-renew")
+			}
 			return &auth, nil
 		}
 	}
