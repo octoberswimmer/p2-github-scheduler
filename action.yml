@@ -1,5 +1,5 @@
-name: 'P2 GitHub Scheduler'
-description: 'Reschedule GitHub Issues using P2 scheduling algorithm'
+name: 'p2 GitHub Scheduler'
+description: 'Reschedule GitHub Issues using p2 scheduling algorithm'
 author: 'OctoberSwimmer'
 branding:
   color: blue

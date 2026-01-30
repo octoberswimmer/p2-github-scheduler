@@ -25,8 +25,8 @@ var (
 	dryRun  bool
 	rootCmd = &cobra.Command{
 		Use:   "p2-github-scheduler <github-url>",
-		Short: "Reschedule GitHub issues using P2's scheduling algorithm",
-		Long: `Fetches GitHub issues from a repository or project, runs P2's
+		Short: "Reschedule GitHub issues using p2's scheduling algorithm",
+		Long: `Fetches GitHub issues from a repository or project, runs p2's
 scheduling algorithm, and updates the calculated date fields
 (Expected Start, Expected Completion, 98% Completion) in GitHub Projects.
 
@@ -121,8 +121,8 @@ func run(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Convert issues to P2 tasks
-	fmt.Println("Converting to P2 tasks...")
+	// Convert issues to p2 tasks
+	fmt.Println("Converting to p2 tasks...")
 	tasks, users := issuesToTasks(allIssues)
 	fmt.Printf("Created %d tasks with %d users\n", len(tasks), len(users))
 

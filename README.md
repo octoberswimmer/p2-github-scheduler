@@ -1,12 +1,12 @@
 # p2-github-scheduler
 
-A CLI tool and GitHub Action that reschedules GitHub Issues using P2's scheduling algorithm and updates calculated date fields in GitHub Projects.
+A CLI tool and GitHub Action that reschedules GitHub Issues using p2's scheduling algorithm and updates calculated date fields in GitHub Projects.
 
 ## Features
 
 - Fetches all issues from a GitHub repository
 - Extracts custom field values (Low Estimate, High Estimate) from GitHub Projects
-- Runs P2's scheduling algorithm
+- Runs p2's scheduling algorithm
 - Updates calculated date fields in GitHub Projects:
   - Expected Start
   - Expected Completion
@@ -115,11 +115,11 @@ The installation token is scoped to only:
 1. Fetches all open issues from the repository
 2. Identifies which issues are linked to GitHub Projects
 3. Extracts estimate values from Project custom fields
-4. Converts issues to P2 tasks with:
+4. Converts issues to p2 tasks with:
    - Issue number as task ID
    - Issue title as task name
    - Assignee as task user
    - Milestone as package
    - Closed state as done
-5. Runs P2's scheduler with statistical analysis for completion date ranges
+5. Runs p2's scheduler with statistical analysis for completion date ranges
 6. Updates the calculated date fields in GitHub Projects
