@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/joho/godotenv"
 	"github.com/octoberswimmer/p2/github"
