@@ -53,6 +53,10 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: p2-schedule-${{ github.repository }}
+  cancel-in-progress: true
+
 jobs:
   schedule:
     runs-on: ubuntu-latest
