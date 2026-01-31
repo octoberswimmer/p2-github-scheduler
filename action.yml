@@ -85,12 +85,11 @@ runs:
       run: |
         GITHUB_URL="${{ inputs.github-url }}"
         if [ -z "$GITHUB_URL" ]; then
-          # Auto-detect from issue event
+          # Auto-detect from issue event, or fall back to repository
           if [ -n "${{ github.event.issue.number }}" ]; then
             GITHUB_URL="https://github.com/${{ github.repository }}/issues/${{ github.event.issue.number }}"
           else
-            echo "::error::No github-url provided and no issue event detected"
-            exit 1
+            GITHUB_URL="https://github.com/${{ github.repository }}"
           fi
         fi
 
