@@ -307,7 +307,7 @@ type schedulingIssue struct {
 	issueNum int      // issue number
 	owner    string   // repository owner
 	repo     string   // repository name
-	reason   string   // "cycle", "missing_dependency", "onhold_dependency"
+	reason   string   // "cycle", "missing_dependency", "onhold_dependency", "missing_estimate", "invalid_estimate"
 	details  []string // cycle path or list of problematic deps
 }
 
@@ -812,6 +812,35 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 					details:  details,
 				})
 			}
+			// Check for missing estimates (only if not both zero, which gets defaulted)
+			var missingEstimates []string
+			if task.EstimateLow == 0 && task.EstimateHigh > 0 {
+				missingEstimates = append(missingEstimates, "Low Estimate")
+			}
+			if task.EstimateHigh == 0 && task.EstimateLow > 0 {
+				missingEstimates = append(missingEstimates, "High Estimate")
+			}
+			if len(missingEstimates) > 0 {
+				schedIssues = append(schedIssues, schedulingIssue{
+					issueRef: ref,
+					issueNum: iwp.issueNum,
+					owner:    iwp.owner,
+					repo:     iwp.repo,
+					reason:   "missing_estimate",
+					details:  missingEstimates,
+				})
+			}
+			// Check for invalid estimates (high must be >= low)
+			if task.EstimateLow > 0 && task.EstimateHigh > 0 && task.EstimateHigh < task.EstimateLow {
+				schedIssues = append(schedIssues, schedulingIssue{
+					issueRef: ref,
+					issueNum: iwp.issueNum,
+					owner:    iwp.owner,
+					repo:     iwp.repo,
+					reason:   "invalid_estimate",
+					details:  []string{fmt.Sprintf("High Estimate (%.1f) must be greater than or equal to Low Estimate (%.1f)", task.EstimateHigh, task.EstimateLow)},
+				})
+			}
 		}
 
 		tasks = append(tasks, task)
@@ -1056,6 +1085,17 @@ func formatSchedulingComment(si schedulingIssue) string {
 			sb.WriteString(fmt.Sprintf("- %s\n", detail))
 		}
 		sb.WriteString("\nGrant the p2 GitHub App access to all repositories linked in this project.")
+	case "missing_estimate":
+		sb.WriteString("This issue cannot be scheduled because it is missing required estimate fields.\n\n")
+		sb.WriteString("**Missing fields:**\n")
+		for _, field := range si.details {
+			sb.WriteString(fmt.Sprintf("- %s\n", field))
+		}
+	case "invalid_estimate":
+		sb.WriteString("This issue cannot be scheduled because the estimates are invalid.\n\n")
+		for _, detail := range si.details {
+			sb.WriteString(fmt.Sprintf("%s\n", detail))
+		}
 	}
 
 	sb.WriteString("\n---\n*This comment is automatically managed by p2-github-scheduler*")

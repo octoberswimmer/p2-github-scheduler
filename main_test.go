@@ -1650,3 +1650,271 @@ func TestProjectInfoFromGetProjectFields(t *testing.T) {
 		t.Errorf("Low Estimate field ID = %q, want %q", projectInfo.FieldIDs["Low Estimate"], "field-4")
 	}
 }
+
+func TestIssuesToTasks_DetectsMissingLowEstimate(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Task with missing low estimate",
+			state:        "open",
+			lowEstimate:  0,
+			highEstimate: 8,
+			hasEstimates: true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+
+	si := schedIssues[0]
+	if si.reason != "missing_estimate" {
+		t.Errorf("expected reason 'missing_estimate', got %q", si.reason)
+	}
+	if len(si.details) != 1 || si.details[0] != "Low Estimate" {
+		t.Errorf("expected details ['Low Estimate'], got %v", si.details)
+	}
+}
+
+func TestIssuesToTasks_DetectsMissingHighEstimate(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Task with missing high estimate",
+			state:        "open",
+			lowEstimate:  4,
+			highEstimate: 0,
+			hasEstimates: true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+
+	si := schedIssues[0]
+	if si.reason != "missing_estimate" {
+		t.Errorf("expected reason 'missing_estimate', got %q", si.reason)
+	}
+	if len(si.details) != 1 || si.details[0] != "High Estimate" {
+		t.Errorf("expected details ['High Estimate'], got %v", si.details)
+	}
+}
+
+func TestIssuesToTasks_DetectsInvalidEstimate(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Task with invalid estimates",
+			state:        "open",
+			lowEstimate:  8,
+			highEstimate: 4,
+			hasEstimates: true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+
+	si := schedIssues[0]
+	if si.reason != "invalid_estimate" {
+		t.Errorf("expected reason 'invalid_estimate', got %q", si.reason)
+	}
+	if len(si.details) != 1 {
+		t.Errorf("expected 1 detail, got %d", len(si.details))
+	}
+	if !strings.Contains(si.details[0], "must be greater than or equal to") {
+		t.Errorf("expected detail to mention 'must be greater than or equal to', got %q", si.details[0])
+	}
+}
+
+func TestIssuesToTasks_ValidEstimatesNoIssue(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Task with valid estimates",
+			state:        "open",
+			lowEstimate:  4,
+			highEstimate: 8,
+			hasEstimates: true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues, got %d: %+v", len(schedIssues), schedIssues)
+	}
+}
+
+func TestIssuesToTasks_EqualEstimatesValid(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Task with equal estimates",
+			state:        "open",
+			lowEstimate:  4,
+			highEstimate: 4,
+			hasEstimates: true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues (equal estimates are valid), got %d: %+v", len(schedIssues), schedIssues)
+	}
+}
+
+func TestIssuesToTasks_OnHoldTaskNoEstimateIssue(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:            "owner",
+			repo:             "repo",
+			issueNum:         1,
+			title:            "On-hold task with missing estimate",
+			state:            "open",
+			schedulingStatus: "On Hold",
+			lowEstimate:      0,
+			highEstimate:     8,
+			hasEstimates:     true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues for on-hold task, got %d: %+v", len(schedIssues), schedIssues)
+	}
+}
+
+func TestIssuesToTasks_ClosedTaskNoEstimateIssue(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Closed task with invalid estimates",
+			state:        "closed",
+			lowEstimate:  8,
+			highEstimate: 4,
+			hasEstimates: true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues for closed task, got %d: %+v", len(schedIssues), schedIssues)
+	}
+}
+
+func TestIssuesToTasks_DraftTaskNoEstimateIssue(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/draft/item-123": {
+			owner:         "owner",
+			repo:          "repo",
+			title:         "Draft task with invalid estimates",
+			state:         "open",
+			isDraft:       true,
+			projectItemID: "item-123",
+			lowEstimate:   8,
+			highEstimate:  4,
+			hasEstimates:  true,
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues for draft task, got %d: %+v", len(schedIssues), schedIssues)
+	}
+}
+
+func TestIssuesToTasks_BothEstimatesZeroGetsDefaults(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:        "owner",
+			repo:         "repo",
+			issueNum:     1,
+			title:        "Task with no estimates",
+			state:        "open",
+			lowEstimate:  0,
+			highEstimate: 0,
+			hasEstimates: false,
+		},
+	}
+
+	tasks, _, schedIssues := issuesToTasks(issues)
+
+	// Should have no scheduling issues - defaults are applied
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues when both estimates are zero, got %d: %+v", len(schedIssues), schedIssues)
+	}
+
+	// Verify defaults were applied
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].EstimateLow != 1 {
+		t.Errorf("expected default low estimate of 1, got %.1f", tasks[0].EstimateLow)
+	}
+	if tasks[0].EstimateHigh != 4 {
+		t.Errorf("expected default high estimate of 4, got %.1f", tasks[0].EstimateHigh)
+	}
+}
+
+func TestFormatSchedulingComment_MissingEstimate(t *testing.T) {
+	si := schedulingIssue{
+		reason:  "missing_estimate",
+		details: []string{"Low Estimate"},
+	}
+
+	comment := formatSchedulingComment(si)
+
+	if !strings.Contains(comment, schedulingCommentMarker) {
+		t.Error("comment should contain the marker")
+	}
+	if !strings.Contains(comment, "missing required estimate") {
+		t.Error("comment should mention missing estimate")
+	}
+	if !strings.Contains(comment, "Low Estimate") {
+		t.Error("comment should list the missing field")
+	}
+}
+
+func TestFormatSchedulingComment_InvalidEstimate(t *testing.T) {
+	si := schedulingIssue{
+		reason:  "invalid_estimate",
+		details: []string{"High Estimate (4.0) must be greater than or equal to Low Estimate (8.0)"},
+	}
+
+	comment := formatSchedulingComment(si)
+
+	if !strings.Contains(comment, schedulingCommentMarker) {
+		t.Error("comment should contain the marker")
+	}
+	if !strings.Contains(comment, "estimates are invalid") {
+		t.Error("comment should mention invalid estimates")
+	}
+	if !strings.Contains(comment, "must be greater than or equal to") {
+		t.Error("comment should contain the detail message")
+	}
+}

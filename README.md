@@ -34,6 +34,8 @@ Issues cannot be scheduled when:
 - **Dependency cycle**: The issue is part of a circular dependency chain (A blocks B, B blocks A)
 - **Missing dependency**: The issue depends on another issue that is not in the project
 - **On-hold dependency**: The issue depends on another issue that has Scheduling Status set to "On Hold"
+- **Missing estimate**: The issue has only one of Low Estimate or High Estimate set (both or neither must be set)
+- **Invalid estimate**: The High Estimate is less than the Low Estimate
 
 Issues with scheduling problems will not have their date fields updated until the problem is resolved.
 
