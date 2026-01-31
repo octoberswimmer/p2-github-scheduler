@@ -4,18 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
 
 	"github.com/joho/godotenv"
+	"github.com/octoberswimmer/p2-github-scheduler/ghscheduler"
+	"github.com/octoberswimmer/p2-github-scheduler/p2"
 	"github.com/octoberswimmer/p2/github"
 	"github.com/octoberswimmer/p2/planner"
-	"github.com/octoberswimmer/p2/planner/lseq"
-	"github.com/octoberswimmer/p2/recfile"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -93,24 +90,24 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse the URL to determine what we're working with
-	urlInfo, err := parseGitHubURL(url)
+	urlInfo, err := ghscheduler.ParseGitHubURL(url)
 	if err != nil {
 		return fmt.Errorf("invalid GitHub URL: %w", err)
 	}
 
-	var allIssues map[string]issueWithProject
+	var allIssues map[string]p2.IssueWithProject
 
-	if urlInfo.isProject {
+	if urlInfo.IsProject {
 		// Fetch issues directly from the project
-		fmt.Printf("Fetching items from project %s #%d...\n", urlInfo.owner, urlInfo.projectNum)
-		allIssues, err = fetchProjectItems(accessToken, urlInfo)
+		fmt.Printf("Fetching items from project %s #%d...\n", urlInfo.Owner, urlInfo.ProjectNum)
+		allIssues, err = ghscheduler.FetchProjectItems(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Fetch issues from the repository
-		fmt.Printf("Scheduling tasks for %s/%s\n", urlInfo.owner, urlInfo.repo)
-		allIssues, err = fetchRepoIssues(accessToken, urlInfo)
+		fmt.Printf("Scheduling tasks for %s/%s\n", urlInfo.Owner, urlInfo.Repo)
+		allIssues, err = ghscheduler.FetchRepoIssues(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
@@ -123,7 +120,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Convert issues to p2 tasks
 	fmt.Println("Converting to p2 tasks...")
-	tasks, users, schedIssues := issuesToTasks(allIssues)
+	tasks, users, schedIssues := p2.IssuesToTasks(allIssues)
 	fmt.Printf("Created %d tasks with %d users\n", len(tasks), len(users))
 
 	if len(tasks) == 0 {
@@ -142,7 +139,7 @@ func run(cmd *cobra.Command, args []string) error {
 	entries := planner.ScheduleWithUsers(tasks, users)
 
 	// Extract cycle information from scheduler results
-	schedIssues = extractCycleIssues(entries, allIssues, schedIssues)
+	schedIssues = p2.ExtractCycleIssues(entries, allIssues, schedIssues)
 
 	ganttData, err := planner.ComputeGanttData(entries, tasks, true, base, users)
 	if err != nil {
@@ -152,18 +149,18 @@ func run(cmd *cobra.Command, args []string) error {
 	// Build set of issues with scheduling problems
 	unschedulableIssues := make(map[string]bool)
 	for _, si := range schedIssues {
-		unschedulableIssues[si.issueRef] = true
+		unschedulableIssues[si.IssueRef] = true
 	}
 
 	// Prepare updates
-	updates := prepareUpdates(ganttData, allIssues, unschedulableIssues)
+	updates := p2.PrepareUpdates(ganttData, allIssues, unschedulableIssues)
 
 	// Print scheduling issues
 	if len(schedIssues) > 0 {
 		fmt.Printf("\nFound %d issues with scheduling problems:\n", len(schedIssues))
 		for _, si := range schedIssues {
-			fmt.Printf("  %s/%s #%d: %s\n", si.owner, si.repo, si.issueNum, si.reason)
-			for _, detail := range si.details {
+			fmt.Printf("  %s/%s #%d: %s\n", si.Owner, si.Repo, si.IssueNum, si.Reason)
+			for _, detail := range si.Details {
 				fmt.Printf("       - %s\n", detail)
 			}
 		}
@@ -177,24 +174,24 @@ func run(cmd *cobra.Command, args []string) error {
 	if len(updates) > 0 {
 		fmt.Printf("\nFound %d tasks with date changes:\n", len(updates))
 		for _, u := range updates {
-			fmt.Printf("  %s #%d %s\n", u.repoKey, u.issueNum, u.name)
-			if u.clearDates {
-				if u.clearReason == "closed" {
+			fmt.Printf("  %s #%d %s\n", u.RepoKey, u.IssueNum, u.Name)
+			if u.ClearDates {
+				if u.ClearReason == "closed" {
 					fmt.Println("       (clearing dates and estimates - task is closed)")
-				} else if u.clearReason == "unschedulable" {
+				} else if u.ClearReason == "unschedulable" {
 					fmt.Println("       (clearing dates - has scheduling issues)")
 				} else {
 					fmt.Println("       (clearing dates - task is on hold)")
 				}
 			} else {
-				if !u.expectedStart.IsZero() {
-					fmt.Printf("       Expected Start: %s\n", u.expectedStart.Format("2006-01-02"))
+				if !u.ExpectedStart.IsZero() {
+					fmt.Printf("       Expected Start: %s\n", u.ExpectedStart.Format("2006-01-02"))
 				}
-				if !u.expectedCompletion.IsZero() {
-					fmt.Printf("       Expected Completion: %s\n", u.expectedCompletion.Format("2006-01-02"))
+				if !u.ExpectedCompletion.IsZero() {
+					fmt.Printf("       Expected Completion: %s\n", u.ExpectedCompletion.Format("2006-01-02"))
 				}
-				if !u.completion98.IsZero() {
-					fmt.Printf("       98%% Completion: %s\n", u.completion98.Format("2006-01-02"))
+				if !u.Completion98.IsZero() {
+					fmt.Printf("       98%% Completion: %s\n", u.Completion98.Format("2006-01-02"))
 				}
 			}
 		}
@@ -208,11 +205,11 @@ func run(cmd *cobra.Command, args []string) error {
 	// Apply updates to GitHub
 	fmt.Println("\nUpdating GitHub...")
 	for _, u := range updates {
-		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: u.owner, Name: u.repo})
-		if err := applyUpdate(client, u); err != nil {
-			logrus.Warnf("Failed to update issue #%d: %v", u.issueNum, err)
+		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: u.Owner, Name: u.Repo})
+		if err := ghscheduler.ApplyUpdate(client, u); err != nil {
+			logrus.Warnf("Failed to update issue #%d: %v", u.IssueNum, err)
 		} else {
-			fmt.Printf("  Updated %s #%d\n", u.repoKey, u.issueNum)
+			fmt.Printf("  Updated %s #%d\n", u.RepoKey, u.IssueNum)
 		}
 	}
 
@@ -220,11 +217,11 @@ func run(cmd *cobra.Command, args []string) error {
 	if len(schedIssues) > 0 {
 		fmt.Println("\nUpdating scheduling comments...")
 		for _, si := range schedIssues {
-			client := github.NewClient(accessToken, &github.GitHubRepository{Owner: si.owner, Name: si.repo})
-			if err := postOrUpdateSchedulingComment(client, si); err != nil {
-				logrus.Warnf("Failed to post comment for #%d: %v", si.issueNum, err)
+			client := github.NewClient(accessToken, &github.GitHubRepository{Owner: si.Owner, Name: si.Repo})
+			if err := ghscheduler.PostOrUpdateSchedulingComment(client, si); err != nil {
+				logrus.Warnf("Failed to post comment for #%d: %v", si.IssueNum, err)
 			} else {
-				fmt.Printf("  Posted comment on %s/%s #%d\n", si.owner, si.repo, si.issueNum)
+				fmt.Printf("  Posted comment on %s/%s #%d\n", si.Owner, si.Repo, si.IssueNum)
 			}
 		}
 	}
@@ -233,7 +230,7 @@ func run(cmd *cobra.Command, args []string) error {
 	fmt.Println("\nCleaning up resolved scheduling comments...")
 	for ref, iwp := range allIssues {
 		// Skip draft issues
-		if iwp.isDraft {
+		if iwp.IsDraft {
 			continue
 		}
 		// Skip issues that still have problems
@@ -241,983 +238,17 @@ func run(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		// Skip on-hold and closed issues (they don't need scheduling comments cleaned up)
-		if iwp.schedulingStatus == "On Hold" || strings.EqualFold(iwp.state, "closed") {
+		if iwp.SchedulingStatus == "On Hold" || strings.EqualFold(iwp.State, "closed") {
 			continue
 		}
 
-		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: iwp.owner, Name: iwp.repo})
-		if err := deleteSchedulingComment(client, iwp.issueNum); err != nil {
-			logrus.Warnf("Failed to delete comment for #%d: %v", iwp.issueNum, err)
+		client := github.NewClient(accessToken, &github.GitHubRepository{Owner: iwp.Owner, Name: iwp.Repo})
+		if err := ghscheduler.DeleteSchedulingComment(client, iwp.IssueNum); err != nil {
+			logrus.Warnf("Failed to delete comment for #%d: %v", iwp.IssueNum, err)
 		}
 	}
 
 	fmt.Println("Done!")
-	return nil
-}
-
-type urlInfo struct {
-	owner      string
-	repo       string
-	isOrg      bool
-	isProject  bool
-	projectNum int
-}
-
-type issueWithProject struct {
-	owner                string
-	repo                 string
-	issueNum             int
-	title                string
-	body                 string
-	state                string
-	assignee             string
-	labels               []string
-	milestone            string
-	project              *github.ProjectItemInfo
-	lowEstimate          float64
-	highEstimate         float64
-	order                int
-	schedulingStatus     string            // "On Hold", etc. from Scheduling Status field
-	hasSchedulingDates   bool              // true if any scheduling date fields are set
-	hasEstimates         bool              // true if Low Estimate or High Estimate are set
-	blockedBy            []github.IssueRef // issues that block this one
-	blocking             []github.IssueRef // issues that this one blocks
-	inaccessibleBlockers int               // count of blockers from inaccessible repos
-	isDraft              bool              // true if this is a draft issue
-	projectItemID        string            // project item node ID (used as ID for drafts)
-}
-
-type dateUpdate struct {
-	owner              string
-	repo               string
-	repoKey            string
-	issueNum           int
-	name               string
-	project            *github.ProjectItemInfo
-	expectedStart      time.Time
-	expectedCompletion time.Time
-	completion98       time.Time
-	clearDates         bool   // true if dates should be cleared (closed/on-hold tasks)
-	clearReason        string // "closed" or "on hold"
-}
-
-// schedulingIssue tracks problems that prevent an issue from being scheduled
-type schedulingIssue struct {
-	issueRef string   // e.g., "github.com/owner/repo/issues/123"
-	issueNum int      // issue number
-	owner    string   // repository owner
-	repo     string   // repository name
-	reason   string   // "cycle", "missing_dependency", "onhold_dependency", "missing_estimate", "invalid_estimate"
-	details  []string // cycle path or list of problematic deps
-}
-
-func parseGitHubURL(url string) (*urlInfo, error) {
-	// Remove trailing slashes and protocol
-	url = strings.TrimSuffix(url, "/")
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-
-	// Org project URL: github.com/orgs/org/projects/N
-	orgProjectRe := regexp.MustCompile(`^github\.com/orgs/([^/]+)/projects/(\d+)`)
-	if matches := orgProjectRe.FindStringSubmatch(url); matches != nil {
-		num, _ := strconv.Atoi(matches[2])
-		return &urlInfo{
-			owner:      matches[1],
-			isOrg:      true,
-			isProject:  true,
-			projectNum: num,
-		}, nil
-	}
-
-	// User project URL: github.com/users/user/projects/N
-	userProjectRe := regexp.MustCompile(`^github\.com/users/([^/]+)/projects/(\d+)`)
-	if matches := userProjectRe.FindStringSubmatch(url); matches != nil {
-		num, _ := strconv.Atoi(matches[2])
-		return &urlInfo{
-			owner:      matches[1],
-			isOrg:      false,
-			isProject:  true,
-			projectNum: num,
-		}, nil
-	}
-
-	// Repo URL: github.com/owner/repo or github.com/owner/repo/issues/N
-	repoRe := regexp.MustCompile(`^github\.com/([^/]+)/([^/]+)`)
-	if matches := repoRe.FindStringSubmatch(url); matches != nil {
-		return &urlInfo{
-			owner: matches[1],
-			repo:  matches[2],
-		}, nil
-	}
-
-	// Short form: owner/repo
-	shortRe := regexp.MustCompile(`^([^/]+)/([^/]+)$`)
-	if matches := shortRe.FindStringSubmatch(url); matches != nil {
-		return &urlInfo{
-			owner: matches[1],
-			repo:  matches[2],
-		}, nil
-	}
-
-	return nil, fmt.Errorf("could not parse GitHub URL: %s", url)
-}
-
-func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithProject, error) {
-	project := &github.GitHubProject{
-		Owner:  info.owner,
-		Number: info.projectNum,
-		IsOrg:  info.isOrg,
-	}
-
-	gqlClient := github.NewGraphQLClient(accessToken)
-
-	// Fetch project field IDs once (instead of per-issue)
-	projectFields, err := gqlClient.GetProjectFields(project)
-	if err != nil {
-		logrus.Warnf("Failed to fetch project fields: %v", err)
-		// Continue without field IDs - updates won't work but we can still schedule
-	} else {
-		logrus.Debugf("Project fields: %v", projectFields.FieldIDs)
-	}
-
-	items, err := gqlClient.GetProjectItems(project)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch project items: %w", err)
-	}
-
-	fmt.Printf("Found %d items in project\n", len(items))
-
-	allIssues := make(map[string]issueWithProject)
-	var inaccessibleItems []string
-
-	// Track position for ordering (GraphQL returns items in display order)
-	position := 0
-	for _, item := range items {
-		var ref string
-		var isDraft bool
-
-		if item.ContentType == "ISSUE" {
-			ref = fmt.Sprintf("github.com/%s/%s/issues/%d", item.RepoOwner, item.RepoName, item.IssueNumber)
-		} else if item.ContentType == "DRAFT_ISSUE" {
-			// Draft issues use project item ID as ref and are treated as on-hold
-			ref = fmt.Sprintf("draft:%s", item.ID)
-			isDraft = true
-			logrus.Debugf("Including draft issue as on-hold: %s", item.Title)
-		} else if item.Title != "" {
-			// Item has a title but no content - likely from an inaccessible repo
-			inaccessibleItems = append(inaccessibleItems, item.Title)
-			continue
-		} else {
-			// Skip items with no useful content
-			continue
-		}
-
-		// Extract estimates and status from custom fields
-		var lowEstimate, highEstimate float64
-		var schedulingStatus string
-		var hasEstimates, hasSchedulingDates bool
-		if v, ok := item.CustomFields["Low Estimate"].(float64); ok {
-			lowEstimate = v
-			hasEstimates = true
-		}
-		if v, ok := item.CustomFields["High Estimate"].(float64); ok {
-			highEstimate = v
-			hasEstimates = true
-		}
-		if v, ok := item.CustomFields["Scheduling Status"].(string); ok {
-			schedulingStatus = v
-		}
-		// Check if any scheduling date fields are set
-		if _, ok := item.CustomFields["Expected Start"].(string); ok {
-			hasSchedulingDates = true
-		}
-		if _, ok := item.CustomFields["Expected Completion"].(string); ok {
-			hasSchedulingDates = true
-		}
-		if _, ok := item.CustomFields["98% Completion"].(string); ok {
-			hasSchedulingDates = true
-		}
-
-		// Build project info for this item using the project-level field IDs
-		var projectInfo *github.ProjectItemInfo
-		if projectFields != nil {
-			projectInfo = &github.ProjectItemInfo{
-				ProjectID:           projectFields.ProjectID,
-				ItemID:              item.ID,
-				FieldIDs:            projectFields.FieldIDs,
-				SingleSelectOptions: projectFields.SingleSelectOptions,
-			}
-		}
-
-		var assignee string
-		if len(item.Assignees) > 0 {
-			assignee = item.Assignees[0]
-		}
-
-		allIssues[ref] = issueWithProject{
-			owner:                item.RepoOwner,
-			repo:                 item.RepoName,
-			issueNum:             item.IssueNumber,
-			title:                item.Title,
-			body:                 item.Body,
-			state:                item.State,
-			assignee:             assignee,
-			labels:               item.Labels,
-			milestone:            item.Milestone,
-			project:              projectInfo,
-			lowEstimate:          lowEstimate,
-			highEstimate:         highEstimate,
-			order:                position,
-			schedulingStatus:     schedulingStatus,
-			hasSchedulingDates:   hasSchedulingDates,
-			hasEstimates:         hasEstimates,
-			blockedBy:            item.BlockedBy,
-			blocking:             item.Blocking,
-			inaccessibleBlockers: item.InaccessibleBlockers,
-			isDraft:              isDraft,
-			projectItemID:        item.ID,
-		}
-
-		var blockedByRefs []string
-		for _, b := range item.BlockedBy {
-			blockedByRefs = append(blockedByRefs, fmt.Sprintf("%s/%s#%d", b.Owner, b.Repo, b.Number))
-		}
-		var blockingRefs []string
-		for _, b := range item.Blocking {
-			blockingRefs = append(blockingRefs, fmt.Sprintf("%s/%s#%d", b.Owner, b.Repo, b.Number))
-		}
-		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasDates=%v, hasEstimates=%v, blockedBy=%v, blocking=%v, inaccessibleBlockers=%d",
-			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingDates, hasEstimates, blockedByRefs, blockingRefs, item.InaccessibleBlockers)
-		position++
-	}
-
-	buildReverseDependencies(allIssues)
-
-	if len(inaccessibleItems) > 0 {
-		fmt.Printf("\nSkipped %d inaccessible items:\n", len(inaccessibleItems))
-		for _, title := range inaccessibleItems {
-			fmt.Printf("  - %s\n", title)
-		}
-		fmt.Println("Grant the p2 GitHub App access to all repositories linked in this project.")
-	}
-
-	return allIssues, nil
-}
-
-func fetchRepoIssues(accessToken string, info *urlInfo) (map[string]issueWithProject, error) {
-	client := github.NewClient(accessToken, &github.GitHubRepository{Owner: info.owner, Name: info.repo})
-
-	fmt.Println("Fetching issues...")
-	issues, err := client.ListIssues("all")
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch issues: %w", err)
-	}
-	fmt.Printf("Found %d issues\n", len(issues))
-
-	if len(issues) == 0 {
-		return nil, nil
-	}
-
-	allIssues := make(map[string]issueWithProject)
-
-	fmt.Println("Fetching project information for issues...")
-	for _, issue := range issues {
-		issueData, err := client.GetIssueWithCustomFields(issue.Number)
-		if err != nil {
-			logrus.Warnf("Failed to get custom fields for issue #%d: %v", issue.Number, err)
-			continue
-		}
-
-		projectInfo := github.ExtractProjectInfo(issueData)
-		if projectInfo == nil {
-			logrus.Debugf("Issue #%d is not in any project", issue.Number)
-			continue
-		}
-
-		lowEstimate, highEstimate, order := github.ExtractCustomFields(issueData)
-		schedulingStatus := extractSchedulingStatus(issueData)
-
-		ref := fmt.Sprintf("github.com/%s/%s/issues/%d", info.owner, info.repo, issue.Number)
-
-		var assignee string
-		if issue.Assignee != nil {
-			assignee = issue.Assignee.Login
-		}
-
-		var labels []string
-		for _, l := range issue.Labels {
-			labels = append(labels, l.Name)
-		}
-
-		var milestone string
-		if issue.Milestone != nil {
-			milestone = issue.Milestone.Title
-		}
-
-		allIssues[ref] = issueWithProject{
-			owner:            info.owner,
-			repo:             info.repo,
-			issueNum:         issue.Number,
-			title:            issue.Title,
-			body:             issue.Body,
-			state:            issue.State,
-			assignee:         assignee,
-			labels:           labels,
-			milestone:        milestone,
-			project:          projectInfo,
-			lowEstimate:      lowEstimate,
-			highEstimate:     highEstimate,
-			order:            order,
-			schedulingStatus: schedulingStatus,
-		}
-
-		logrus.Debugf("Issue #%d is in project %s (low=%.1f, high=%.1f, order=%d, schedulingStatus=%s)",
-			issue.Number, projectInfo.ProjectID, lowEstimate, highEstimate, order, schedulingStatus)
-	}
-
-	return allIssues, nil
-}
-
-// extractSchedulingStatus extracts the "Scheduling Status" single-select field value from issue data
-func extractSchedulingStatus(issueData map[string]interface{}) string {
-	repo, ok := issueData["repository"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	issue, ok := repo["issue"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	projectItems, ok := issue["projectItems"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	nodes, ok := projectItems["nodes"].([]interface{})
-	if !ok || len(nodes) == 0 {
-		return ""
-	}
-
-	// Check first project item for Scheduling Status field
-	for _, node := range nodes {
-		projectItem, ok := node.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		fieldValues, ok := projectItem["fieldValues"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		fieldNodes, ok := fieldValues["nodes"].([]interface{})
-		if !ok {
-			continue
-		}
-
-		for _, fieldNode := range fieldNodes {
-			field, ok := fieldNode.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			fieldInfo, ok := field["field"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			fieldName, _ := fieldInfo["name"].(string)
-
-			// Extract single-select fields (have "name" property for the selected option)
-			if fieldName == "Scheduling Status" {
-				if name, ok := field["name"].(string); ok {
-					return name
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-// buildReverseDependencies adds blockedBy entries based on blocking relationships.
-// If issue A is blocking issue B, then B's blockedBy should include A.
-func buildReverseDependencies(issues map[string]issueWithProject) {
-	for ref, iwp := range issues {
-		for _, blocked := range iwp.blocking {
-			blockedRef := fmt.Sprintf("github.com/%s/%s/issues/%d", blocked.Owner, blocked.Repo, blocked.Number)
-			if blockedIssue, ok := issues[blockedRef]; ok {
-				// Check if dependency already exists
-				alreadyExists := false
-				for _, existing := range blockedIssue.blockedBy {
-					if existing.Owner == iwp.owner && existing.Repo == iwp.repo && existing.Number == iwp.issueNum {
-						alreadyExists = true
-						break
-					}
-				}
-				if !alreadyExists {
-					blockedIssue.blockedBy = append(blockedIssue.blockedBy, github.IssueRef{
-						Owner:  iwp.owner,
-						Repo:   iwp.repo,
-						Number: iwp.issueNum,
-					})
-					issues[blockedRef] = blockedIssue
-					logrus.Debugf("Added reverse dependency: %s blocked by %s (from blocking field)", blockedRef, ref)
-				}
-			}
-		}
-	}
-}
-
-func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfile.User, []schedulingIssue) {
-	gen := lseq.NewGenerator("scheduler")
-	userSet := make(map[string]bool)
-	var tasks []planner.Task
-	var schedIssues []schedulingIssue
-
-	// Build a set of on-hold issues for dependency checking
-	onHoldIssues := make(map[string]bool)
-	for ref, iwp := range issues {
-		if iwp.schedulingStatus == "On Hold" || iwp.isDraft {
-			onHoldIssues[ref] = true
-		}
-	}
-
-	// Convert map to slice and sort by order to preserve GitHub Project ordering
-	type refIssue struct {
-		ref string
-		iwp issueWithProject
-	}
-	sortedIssues := make([]refIssue, 0, len(issues))
-	for ref, iwp := range issues {
-		sortedIssues = append(sortedIssues, refIssue{ref: ref, iwp: iwp})
-	}
-	sort.Slice(sortedIssues, func(i, j int) bool {
-		return sortedIssues[i].iwp.order < sortedIssues[j].iwp.order
-	})
-
-	for i, ri := range sortedIssues {
-		ref := ri.ref
-		iwp := ri.iwp
-
-		// Determine task ID based on whether it's a draft or regular issue
-		var taskID string
-		if iwp.isDraft {
-			taskID = fmt.Sprintf("draft:%s", iwp.projectItemID)
-		} else {
-			taskID = fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
-		}
-
-		task := planner.Task{
-			ID:           taskID,
-			Sequence:     lseq.SequentialString(i, "scheduler"),
-			Name:         iwp.title,
-			Ref:          []string{ref},
-			Done:         strings.EqualFold(iwp.state, "closed"),
-			EstimateLow:  iwp.lowEstimate,
-			EstimateHigh: iwp.highEstimate,
-		}
-
-		// Default estimates if not set
-		if task.EstimateLow == 0 && task.EstimateHigh == 0 && !task.Done {
-			task.EstimateLow = 1
-			task.EstimateHigh = 4
-		}
-
-		// Extract assignee (use "unassigned" for tasks with no assignee)
-		if iwp.assignee != "" {
-			task.User = iwp.assignee
-			userSet[iwp.assignee] = true
-		} else {
-			task.User = "unassigned"
-			userSet["unassigned"] = true
-		}
-
-		// Draft issues are always on-hold
-		if iwp.isDraft {
-			task.OnHold = true
-		}
-
-		// Check for on-hold via Scheduling Status field
-		if iwp.schedulingStatus == "On Hold" {
-			task.OnHold = true
-		}
-
-		// Extract milestone as package
-		if iwp.milestone != "" {
-			task.PackageID = iwp.milestone
-		}
-
-		// Track scheduling issues for this task
-		var missingDeps []string
-		var onHoldDeps []string
-
-		// Map blockedBy to DependsOn (only if the blocking task exists in our data)
-		for _, blocker := range iwp.blockedBy {
-			depID := fmt.Sprintf("%s/%s#%d", blocker.Owner, blocker.Repo, blocker.Number)
-			issueKey := fmt.Sprintf("github.com/%s/%s/issues/%d", blocker.Owner, blocker.Repo, blocker.Number)
-
-			blockerIssue, exists := issues[issueKey]
-			if !exists {
-				// Missing dependency - not in the project
-				missingDeps = append(missingDeps, depID)
-				logrus.Warnf("Skipping dependency %s for %s: task not accessible (grant access to %s/%s)", depID, task.ID, blocker.Owner, blocker.Repo)
-				continue
-			}
-
-			// Check if the dependency is on-hold (but not closed - closed deps are ok)
-			if onHoldIssues[issueKey] && !strings.EqualFold(blockerIssue.state, "closed") {
-				onHoldDeps = append(onHoldDeps, depID)
-				logrus.Debugf("Dependency %s for %s is on-hold", depID, task.ID)
-				// Don't add on-hold deps to DependsOn - they would block scheduling
-				continue
-			}
-
-			task.DependsOn = append(task.DependsOn, depID)
-			logrus.Debugf("Added dependency: %s depends on %s", task.ID, depID)
-		}
-
-		// Record scheduling issues for non-on-hold, non-closed tasks
-		if !task.OnHold && !task.Done {
-			if len(missingDeps) > 0 {
-				schedIssues = append(schedIssues, schedulingIssue{
-					issueRef: ref,
-					issueNum: iwp.issueNum,
-					owner:    iwp.owner,
-					repo:     iwp.repo,
-					reason:   "missing_dependency",
-					details:  missingDeps,
-				})
-			}
-			if len(onHoldDeps) > 0 {
-				schedIssues = append(schedIssues, schedulingIssue{
-					issueRef: ref,
-					issueNum: iwp.issueNum,
-					owner:    iwp.owner,
-					repo:     iwp.repo,
-					reason:   "onhold_dependency",
-					details:  onHoldDeps,
-				})
-			}
-			if iwp.inaccessibleBlockers > 0 {
-				details := []string{fmt.Sprintf("%d blocker(s) from inaccessible repositories", iwp.inaccessibleBlockers)}
-				schedIssues = append(schedIssues, schedulingIssue{
-					issueRef: ref,
-					issueNum: iwp.issueNum,
-					owner:    iwp.owner,
-					repo:     iwp.repo,
-					reason:   "inaccessible_dependency",
-					details:  details,
-				})
-			}
-			// Check for missing estimates (only if not both zero, which gets defaulted)
-			var missingEstimates []string
-			if task.EstimateLow == 0 && task.EstimateHigh > 0 {
-				missingEstimates = append(missingEstimates, "Low Estimate")
-			}
-			if task.EstimateHigh == 0 && task.EstimateLow > 0 {
-				missingEstimates = append(missingEstimates, "High Estimate")
-			}
-			if len(missingEstimates) > 0 {
-				schedIssues = append(schedIssues, schedulingIssue{
-					issueRef: ref,
-					issueNum: iwp.issueNum,
-					owner:    iwp.owner,
-					repo:     iwp.repo,
-					reason:   "missing_estimate",
-					details:  missingEstimates,
-				})
-			}
-			// Check for invalid estimates (high must be >= low)
-			if task.EstimateLow > 0 && task.EstimateHigh > 0 && task.EstimateHigh < task.EstimateLow {
-				schedIssues = append(schedIssues, schedulingIssue{
-					issueRef: ref,
-					issueNum: iwp.issueNum,
-					owner:    iwp.owner,
-					repo:     iwp.repo,
-					reason:   "invalid_estimate",
-					details:  []string{fmt.Sprintf("High Estimate (%.1f) must be greater than or equal to Low Estimate (%.1f)", task.EstimateHigh, task.EstimateLow)},
-				})
-			}
-		}
-
-		tasks = append(tasks, task)
-	}
-
-	// Assign sequences properly
-	for j := range tasks {
-		seq, _ := gen.After(tasks[max(0, j-1)].Sequence)
-		tasks[j].Sequence = seq
-	}
-
-	// Create users with default availability
-	var users []recfile.User
-	for username := range userSet {
-		users = append(users, recfile.User{
-			ID:             username,
-			MondayHours:    8,
-			TuesdayHours:   8,
-			WednesdayHours: 8,
-			ThursdayHours:  8,
-			FridayHours:    8,
-		})
-	}
-
-	// Add default user if no assignees
-	if len(users) == 0 {
-		users = append(users, recfile.User{
-			ID:             "unassigned",
-			MondayHours:    8,
-			TuesdayHours:   8,
-			WednesdayHours: 8,
-			ThursdayHours:  8,
-			FridayHours:    8,
-		})
-	}
-
-	return tasks, users, schedIssues
-}
-
-// extractCycleIssues checks scheduler results for dependency cycles and adds them to scheduling issues
-func extractCycleIssues(entries planner.ScheduledEntries, issues map[string]issueWithProject, existing []schedulingIssue) []schedulingIssue {
-	// Build a set of issues that already have scheduling issues (avoid duplicates)
-	hasIssue := make(map[string]bool)
-	for _, si := range existing {
-		hasIssue[si.issueRef] = true
-	}
-
-	for _, entry := range entries.Entries {
-		if entry.IsPackage || len(entry.Cycle) == 0 {
-			continue
-		}
-
-		// Find the issue for this entry
-		for ref, iwp := range issues {
-			taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
-			if taskID == entry.ID && !hasIssue[ref] {
-				existing = append(existing, schedulingIssue{
-					issueRef: ref,
-					issueNum: iwp.issueNum,
-					owner:    iwp.owner,
-					repo:     iwp.repo,
-					reason:   "cycle",
-					details:  entry.Cycle,
-				})
-				hasIssue[ref] = true
-				break
-			}
-		}
-	}
-
-	return existing
-}
-
-func prepareUpdates(ganttData planner.GanttData, issues map[string]issueWithProject, unschedulable map[string]bool) []dateUpdate {
-	var updates []dateUpdate
-
-	// Track which issues we've processed for clearing
-	// Use full task ID to avoid collisions between repos with same issue numbers
-	processed := make(map[string]bool)
-
-	// First pass: check all issues directly for on-hold or closed status
-	// This doesn't depend on the scheduler - just GitHub data
-	for _, iwp := range issues {
-		if iwp.project == nil {
-			continue
-		}
-
-		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
-
-		// Check for on-hold via Scheduling Status field
-		isOnHold := iwp.schedulingStatus == "On Hold"
-		isClosed := strings.EqualFold(iwp.state, "closed")
-
-		if isOnHold || isClosed {
-			// Mark as processed so second pass skips it
-			processed[taskID] = true
-
-			// On-hold: only clear if dates are set (estimates remain)
-			// Closed: clear if dates OR estimates are set
-			if isOnHold && !iwp.hasSchedulingDates {
-				continue
-			}
-			if isClosed && !iwp.hasSchedulingDates && !iwp.hasEstimates {
-				continue
-			}
-			reason := "on hold"
-			if isClosed {
-				reason = "closed"
-			}
-			update := dateUpdate{
-				owner:       iwp.owner,
-				repo:        iwp.repo,
-				repoKey:     fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
-				issueNum:    iwp.issueNum,
-				name:        iwp.title,
-				project:     iwp.project,
-				clearDates:  true,
-				clearReason: reason,
-			}
-			updates = append(updates, update)
-		}
-	}
-
-	// Build a map from task ID to issue for gantt bar lookup
-	taskToIssue := make(map[string]issueWithProject)
-	for _, iwp := range issues {
-		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
-		taskToIssue[taskID] = iwp
-	}
-
-	// Second pass: handle unschedulable issues (clear their dates)
-	for ref, iwp := range issues {
-		if iwp.project == nil {
-			continue
-		}
-
-		taskID := fmt.Sprintf("%s/%s#%d", iwp.owner, iwp.repo, iwp.issueNum)
-
-		// Skip if already processed (on-hold or closed)
-		if processed[taskID] {
-			continue
-		}
-
-		// Check if this issue has scheduling problems
-		if unschedulable[ref] && iwp.hasSchedulingDates {
-			processed[taskID] = true
-			update := dateUpdate{
-				owner:       iwp.owner,
-				repo:        iwp.repo,
-				repoKey:     fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
-				issueNum:    iwp.issueNum,
-				name:        iwp.title,
-				project:     iwp.project,
-				clearDates:  true,
-				clearReason: "unschedulable",
-			}
-			updates = append(updates, update)
-		}
-	}
-
-	// Third pass: check gantt bars for active tasks that need date updates
-	for _, bar := range ganttData.Bars {
-		if bar.IsPackage {
-			continue
-		}
-
-		iwp, ok := taskToIssue[bar.ID]
-		if !ok {
-			logrus.Debugf("No issue found for task %s", bar.ID)
-			continue
-		}
-
-		if iwp.project == nil {
-			logrus.Debugf("Issue %s is not in a project", bar.ID)
-			continue
-		}
-
-		// Skip if already processed (on-hold, closed, or unschedulable)
-		if processed[bar.ID] {
-			continue
-		}
-
-		// Skip issues with scheduling problems (don't write dates)
-		ref := fmt.Sprintf("github.com/%s/%s/issues/%d", iwp.owner, iwp.repo, iwp.issueNum)
-		if unschedulable[ref] {
-			continue
-		}
-
-		update := dateUpdate{
-			owner:              iwp.owner,
-			repo:               iwp.repo,
-			repoKey:            fmt.Sprintf("%s/%s", iwp.owner, iwp.repo),
-			issueNum:           iwp.issueNum,
-			name:               bar.Name,
-			project:            iwp.project,
-			expectedStart:      bar.ExpStartDate,
-			expectedCompletion: bar.MeanDate,
-			completion98:       bar.End98Date,
-		}
-
-		updates = append(updates, update)
-	}
-
-	return updates
-}
-
-const schedulingCommentMarker = "<!-- p2-scheduler-comment -->"
-
-// formatSchedulingComment creates a comment body for a scheduling issue
-func formatSchedulingComment(si schedulingIssue) string {
-	var sb strings.Builder
-	sb.WriteString(schedulingCommentMarker)
-	sb.WriteString("\n**Scheduling Notice**\n\n")
-
-	switch si.reason {
-	case "cycle":
-		sb.WriteString("This issue cannot be scheduled because it is part of a dependency cycle.\n\n")
-		sb.WriteString("**Cycle path:**\n")
-		for i, id := range si.details {
-			if i > 0 {
-				sb.WriteString(" → ")
-			}
-			sb.WriteString(id)
-		}
-		sb.WriteString("\n")
-	case "missing_dependency":
-		sb.WriteString("This issue cannot be scheduled because it depends on issues not in this project.\n\n")
-		sb.WriteString("**Missing dependencies:**\n")
-		for _, dep := range si.details {
-			sb.WriteString(fmt.Sprintf("- %s\n", dep))
-		}
-	case "onhold_dependency":
-		sb.WriteString("This issue cannot be scheduled because it depends on issues that are on hold.\n\n")
-		sb.WriteString("**On-hold dependencies:**\n")
-		for _, dep := range si.details {
-			sb.WriteString(fmt.Sprintf("- %s\n", dep))
-		}
-	case "inaccessible_dependency":
-		sb.WriteString("This issue cannot be scheduled because it depends on issues from repositories the p2 GitHub App cannot access.\n\n")
-		sb.WriteString("**Details:**\n")
-		for _, detail := range si.details {
-			sb.WriteString(fmt.Sprintf("- %s\n", detail))
-		}
-		sb.WriteString("\nGrant the p2 GitHub App access to all repositories linked in this project.")
-	case "missing_estimate":
-		sb.WriteString("This issue cannot be scheduled because it is missing required estimate fields.\n\n")
-		sb.WriteString("**Missing fields:**\n")
-		for _, field := range si.details {
-			sb.WriteString(fmt.Sprintf("- %s\n", field))
-		}
-	case "invalid_estimate":
-		sb.WriteString("This issue cannot be scheduled because the estimates are invalid.\n\n")
-		for _, detail := range si.details {
-			sb.WriteString(fmt.Sprintf("%s\n", detail))
-		}
-	}
-
-	sb.WriteString("\n---\n*This comment is automatically managed by p2-github-scheduler*")
-	return sb.String()
-}
-
-// findSchedulingComment finds the comment ID of an existing scheduling comment on an issue
-func findSchedulingComment(client *github.Client, issueNum int) (int64, error) {
-	comments, err := client.GetIssueComments(issueNum)
-	if err != nil {
-		return 0, err
-	}
-
-	for _, comment := range comments {
-		body, ok := comment["body"].(string)
-		if !ok {
-			continue
-		}
-		if strings.HasPrefix(body, schedulingCommentMarker) {
-			// Extract the comment ID
-			id, ok := comment["id"].(float64)
-			if ok {
-				return int64(id), nil
-			}
-		}
-	}
-
-	return 0, nil // No existing comment found
-}
-
-// postOrUpdateSchedulingComment posts a new comment or updates an existing one
-func postOrUpdateSchedulingComment(client *github.Client, si schedulingIssue) error {
-	existingID, err := findSchedulingComment(client, si.issueNum)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing comment: %w", err)
-	}
-
-	body := formatSchedulingComment(si)
-
-	if existingID > 0 {
-		// Update existing comment
-		return client.UpdateIssueComment(existingID, body)
-	}
-
-	// Create new comment
-	return client.CreateIssueComment(si.issueNum, body)
-}
-
-// deleteSchedulingComment removes an existing scheduling comment if present
-func deleteSchedulingComment(client *github.Client, issueNum int) error {
-	existingID, err := findSchedulingComment(client, issueNum)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing comment: %w", err)
-	}
-
-	if existingID == 0 {
-		return nil // No comment to delete
-	}
-
-	return client.DeleteIssueComment(existingID)
-}
-
-func applyUpdate(client *github.Client, update dateUpdate) error {
-	if update.project == nil {
-		return fmt.Errorf("no project info")
-	}
-
-	// Clear scheduling fields for closed/on-hold tasks
-	if update.clearDates {
-		// Always clear date fields
-		fieldsToClean := []string{
-			"Expected Start",
-			"Expected Completion",
-			"98% Completion",
-		}
-		// Only clear estimates if closed (not on hold)
-		if update.clearReason == "closed" {
-			fieldsToClean = append(fieldsToClean, "Low Estimate", "High Estimate")
-		}
-		for _, fieldName := range fieldsToClean {
-			if fieldID, ok := update.project.FieldIDs[fieldName]; ok {
-				if err := client.ClearField(update.project.ProjectID, update.project.ItemID, fieldID); err != nil {
-					logrus.Warnf("Failed to clear %s for #%d: %v", fieldName, update.issueNum, err)
-				}
-			}
-		}
-		return nil
-	}
-
-	// Update Expected Start
-	if !update.expectedStart.IsZero() {
-		if fieldID, ok := update.project.FieldIDs["Expected Start"]; ok {
-			if err := client.UpdateDateField(update.project.ProjectID, update.project.ItemID, fieldID, update.expectedStart); err != nil {
-				logrus.Warnf("Failed to update Expected Start for #%d: %v", update.issueNum, err)
-			}
-		} else {
-			logrus.Debugf("No 'Expected Start' field found for issue #%d", update.issueNum)
-		}
-	}
-
-	// Update Expected Completion
-	if !update.expectedCompletion.IsZero() {
-		if fieldID, ok := update.project.FieldIDs["Expected Completion"]; ok {
-			if err := client.UpdateDateField(update.project.ProjectID, update.project.ItemID, fieldID, update.expectedCompletion); err != nil {
-				logrus.Warnf("Failed to update Expected Completion for #%d: %v", update.issueNum, err)
-			}
-		} else {
-			logrus.Debugf("No 'Expected Completion' field found for issue #%d", update.issueNum)
-		}
-	}
-
-	// Update 98% Completion
-	if !update.completion98.IsZero() {
-		if fieldID, ok := update.project.FieldIDs["98% Completion"]; ok {
-			if err := client.UpdateDateField(update.project.ProjectID, update.project.ItemID, fieldID, update.completion98); err != nil {
-				logrus.Warnf("Failed to update 98%% Completion for #%d: %v", update.issueNum, err)
-			}
-		} else {
-			logrus.Debugf("No '98%% Completion' field found for issue #%d", update.issueNum)
-		}
-	}
-
 	return nil
 }
 
