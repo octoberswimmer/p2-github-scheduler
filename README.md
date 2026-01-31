@@ -50,6 +50,9 @@ name: Schedule Issues
 on:
   issues:
     types: [opened, edited, closed, reopened, assigned, unassigned, labeled, unlabeled]
+  schedule:
+    - cron: '0 6 * * *'  # Run daily at 6am UTC
+  workflow_dispatch:
 
 permissions:
   id-token: write
