@@ -18,8 +18,14 @@ import (
 )
 
 var (
-	debug   bool
-	dryRun  bool
+	debug  bool
+	dryRun bool
+
+	// Function variables for testing
+	lookupProjectForIssue      = github.LookupProjectForIssue
+	fetchProjectItems          = github.FetchProjectItems
+	fetchRepoIssuesViaProjects = github.FetchRepoIssuesViaProjects
+
 	rootCmd = &cobra.Command{
 		Use:   "p2-github-scheduler <github-url>",
 		Short: "Reschedule GitHub issues using p2's scheduling algorithm",
@@ -100,26 +106,28 @@ func run(cmd *cobra.Command, args []string) error {
 	if urlInfo.IsProject {
 		// Fetch issues directly from the project
 		fmt.Printf("Fetching items from project %s #%d...\n", urlInfo.Owner, urlInfo.ProjectNum)
-		allIssues, err = github.FetchProjectItems(accessToken, urlInfo)
+		allIssues, err = fetchProjectItems(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
 	} else if urlInfo.IssueNum > 0 {
 		// Issue URL - look up its project and fetch all items from that project
 		fmt.Printf("Looking up project for %s/%s#%d...\n", urlInfo.Owner, urlInfo.Repo, urlInfo.IssueNum)
-		projectInfo, err := github.LookupProjectForIssue(accessToken, urlInfo)
+		projectInfo, err := lookupProjectForIssue(accessToken, urlInfo)
 		if err != nil {
-			return fmt.Errorf("failed to find project for issue: %w", err)
+			// Issue is not in a project - nothing to schedule
+			fmt.Printf("Issue #%d is not in a project, nothing to schedule\n", urlInfo.IssueNum)
+			return nil
 		}
 		fmt.Printf("Fetching items from project %s #%d...\n", projectInfo.Owner, projectInfo.ProjectNum)
-		allIssues, err = github.FetchProjectItems(accessToken, projectInfo)
+		allIssues, err = fetchProjectItems(accessToken, projectInfo)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Repo URL - find projects for issues in this repo and fetch all items from those projects
 		fmt.Printf("Looking up projects for %s/%s...\n", urlInfo.Owner, urlInfo.Repo)
-		allIssues, err = github.FetchRepoIssuesViaProjects(accessToken, urlInfo)
+		allIssues, err = fetchRepoIssuesViaProjects(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
