@@ -3,13 +3,12 @@ package ghscheduler
 import (
 	"fmt"
 
-	"github.com/octoberswimmer/p2-github-scheduler/p2"
 	"github.com/octoberswimmer/p2/github"
 	"github.com/sirupsen/logrus"
 )
 
 // ApplyUpdate writes date updates to GitHub
-func ApplyUpdate(client *github.Client, update p2.DateUpdate) error {
+func ApplyUpdate(client *github.Client, update github.DateUpdate) error {
 	if update.Project == nil {
 		return fmt.Errorf("no project info")
 	}

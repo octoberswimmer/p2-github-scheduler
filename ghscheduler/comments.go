@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/octoberswimmer/p2-github-scheduler/p2"
 	"github.com/octoberswimmer/p2/github"
 )
 
@@ -12,7 +11,7 @@ import (
 const SchedulingCommentMarker = "<!-- p2-scheduler-comment -->"
 
 // FormatSchedulingComment creates a comment body for a scheduling issue
-func FormatSchedulingComment(si p2.SchedulingIssue) string {
+func FormatSchedulingComment(si github.SchedulingIssue) string {
 	var sb strings.Builder
 	sb.WriteString(SchedulingCommentMarker)
 	sb.WriteString("\n**Scheduling Notice**\n\n")
@@ -89,7 +88,7 @@ func FindSchedulingComment(client *github.Client, issueNum int) (int64, error) {
 }
 
 // PostOrUpdateSchedulingComment posts a new comment or updates an existing one
-func PostOrUpdateSchedulingComment(client *github.Client, si p2.SchedulingIssue) error {
+func PostOrUpdateSchedulingComment(client *github.Client, si github.SchedulingIssue) error {
 	existingID, err := FindSchedulingComment(client, si.IssueNum)
 	if err != nil {
 		return fmt.Errorf("failed to check for existing comment: %w", err)

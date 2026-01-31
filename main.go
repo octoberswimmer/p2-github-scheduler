@@ -90,24 +90,36 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse the URL to determine what we're working with
-	urlInfo, err := ghscheduler.ParseGitHubURL(url)
+	urlInfo, err := github.ParseGitHubURL(url)
 	if err != nil {
 		return fmt.Errorf("invalid GitHub URL: %w", err)
 	}
 
-	var allIssues map[string]p2.IssueWithProject
+	var allIssues map[string]github.IssueWithProject
 
 	if urlInfo.IsProject {
 		// Fetch issues directly from the project
 		fmt.Printf("Fetching items from project %s #%d...\n", urlInfo.Owner, urlInfo.ProjectNum)
-		allIssues, err = ghscheduler.FetchProjectItems(accessToken, urlInfo)
+		allIssues, err = github.FetchProjectItems(accessToken, urlInfo)
+		if err != nil {
+			return err
+		}
+	} else if urlInfo.IssueNum > 0 {
+		// Issue URL - look up its project and fetch all items from that project
+		fmt.Printf("Looking up project for %s/%s#%d...\n", urlInfo.Owner, urlInfo.Repo, urlInfo.IssueNum)
+		projectInfo, err := github.LookupProjectForIssue(accessToken, urlInfo)
+		if err != nil {
+			return fmt.Errorf("failed to find project for issue: %w", err)
+		}
+		fmt.Printf("Fetching items from project %s #%d...\n", projectInfo.Owner, projectInfo.ProjectNum)
+		allIssues, err = github.FetchProjectItems(accessToken, projectInfo)
 		if err != nil {
 			return err
 		}
 	} else {
-		// Fetch issues from the repository
-		fmt.Printf("Scheduling tasks for %s/%s\n", urlInfo.Owner, urlInfo.Repo)
-		allIssues, err = ghscheduler.FetchRepoIssues(accessToken, urlInfo)
+		// Repo URL - find projects for issues in this repo and fetch all items from those projects
+		fmt.Printf("Looking up projects for %s/%s...\n", urlInfo.Owner, urlInfo.Repo)
+		allIssues, err = github.FetchRepoIssuesViaProjects(accessToken, urlInfo)
 		if err != nil {
 			return err
 		}
