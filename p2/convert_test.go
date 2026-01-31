@@ -8,6 +8,11 @@ import (
 	"github.com/octoberswimmer/p2/planner"
 )
 
+// ptr returns a pointer to the given float64 value
+func ptr(f float64) *float64 {
+	return &f
+}
+
 func TestIssuesToTasks_OnHoldViaSchedulingStatus(t *testing.T) {
 	issues := map[string]IssueWithProject{
 		"github.com/owner/repo/issues/1": {
@@ -237,21 +242,25 @@ func TestIssuesToTasks_UnassignedTasksGetDefaultUser(t *testing.T) {
 func TestIssuesToTasks_DetectsMissingDependencies(t *testing.T) {
 	issues := map[string]IssueWithProject{
 		"github.com/owner/repo/issues/1": {
-			Owner:    "owner",
-			Repo:     "repo",
-			IssueNum: 1,
-			Title:    "Task with missing dep",
-			State:    "open",
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     1,
+			Title:        "Task with missing dep",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
 			BlockedBy: []github.IssueRef{
 				{Owner: "other", Repo: "missing", Number: 99},
 			},
 		},
 		"github.com/owner/repo/issues/2": {
-			Owner:    "owner",
-			Repo:     "repo",
-			IssueNum: 2,
-			Title:    "Task with valid dep",
-			State:    "open",
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     2,
+			Title:        "Task with valid dep",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
 			BlockedBy: []github.IssueRef{
 				{Owner: "owner", Repo: "repo", Number: 1},
 			},
@@ -286,13 +295,17 @@ func TestIssuesToTasks_DetectsOnHoldDependencies(t *testing.T) {
 			Title:            "On-hold task",
 			State:            "open",
 			SchedulingStatus: "On Hold",
+			LowEstimate:      ptr(2),
+			HighEstimate:     ptr(4),
 		},
 		"github.com/owner/repo/issues/2": {
-			Owner:    "owner",
-			Repo:     "repo",
-			IssueNum: 2,
-			Title:    "Task depending on on-hold",
-			State:    "open",
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     2,
+			Title:        "Task depending on on-hold",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
 			BlockedBy: []github.IssueRef{
 				{Owner: "owner", Repo: "repo", Number: 1},
 			},
@@ -336,13 +349,17 @@ func TestIssuesToTasks_ClosedDependencyAllowed(t *testing.T) {
 			Title:            "Closed on-hold task",
 			State:            "closed",
 			SchedulingStatus: "On Hold",
+			LowEstimate:      ptr(2),
+			HighEstimate:     ptr(4),
 		},
 		"github.com/owner/repo/issues/2": {
-			Owner:    "owner",
-			Repo:     "repo",
-			IssueNum: 2,
-			Title:    "Task depending on closed",
-			State:    "open",
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     2,
+			Title:        "Task depending on closed",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
 			BlockedBy: []github.IssueRef{
 				{Owner: "owner", Repo: "repo", Number: 1},
 			},
@@ -372,11 +389,13 @@ func TestIssuesToTasks_ClosedDependencyAllowed(t *testing.T) {
 func TestIssuesToTasks_OnHoldTaskNoSchedulingIssue(t *testing.T) {
 	issues := map[string]IssueWithProject{
 		"github.com/owner/repo/issues/1": {
-			Owner:    "owner",
-			Repo:     "repo",
-			IssueNum: 1,
-			Title:    "Missing dep task",
-			State:    "open",
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     1,
+			Title:        "Missing dep task",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
 			BlockedBy: []github.IssueRef{
 				{Owner: "other", Repo: "missing", Number: 99},
 			},
@@ -388,6 +407,8 @@ func TestIssuesToTasks_OnHoldTaskNoSchedulingIssue(t *testing.T) {
 			Title:            "On-hold with missing dep",
 			State:            "open",
 			SchedulingStatus: "On Hold",
+			LowEstimate:      ptr(2),
+			HighEstimate:     ptr(4),
 			BlockedBy: []github.IssueRef{
 				{Owner: "other", Repo: "missing", Number: 99},
 			},
@@ -413,14 +434,18 @@ func TestIssuesToTasks_DetectsInaccessibleBlockers(t *testing.T) {
 			IssueNum:             1,
 			Title:                "Task with inaccessible blocker",
 			State:                "open",
+			LowEstimate:          ptr(2),
+			HighEstimate:         ptr(4),
 			InaccessibleBlockers: 2,
 		},
 		"github.com/owner/repo/issues/2": {
-			Owner:    "owner",
-			Repo:     "repo",
-			IssueNum: 2,
-			Title:    "Normal task",
-			State:    "open",
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     2,
+			Title:        "Normal task",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
 		},
 	}
 
@@ -451,9 +476,8 @@ func TestIssuesToTasks_DetectsMissingLowEstimate(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Task with missing low estimate",
 			State:        "open",
-			LowEstimate:  0,
-			HighEstimate: 8,
-			HasEstimates: true,
+			LowEstimate:  nil,
+			HighEstimate: ptr(8),
 		},
 	}
 
@@ -480,9 +504,8 @@ func TestIssuesToTasks_DetectsMissingHighEstimate(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Task with missing high estimate",
 			State:        "open",
-			LowEstimate:  4,
-			HighEstimate: 0,
-			HasEstimates: true,
+			LowEstimate:  ptr(4),
+			HighEstimate: nil,
 		},
 	}
 
@@ -509,9 +532,8 @@ func TestIssuesToTasks_DetectsInvalidEstimate(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Task with invalid estimates",
 			State:        "open",
-			LowEstimate:  8,
-			HighEstimate: 4,
-			HasEstimates: true,
+			LowEstimate:  ptr(8),
+			HighEstimate: ptr(4),
 		},
 	}
 
@@ -541,9 +563,8 @@ func TestIssuesToTasks_ValidEstimatesNoIssue(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Task with valid estimates",
 			State:        "open",
-			LowEstimate:  4,
-			HighEstimate: 8,
-			HasEstimates: true,
+			LowEstimate:  ptr(4),
+			HighEstimate: ptr(8),
 		},
 	}
 
@@ -562,9 +583,8 @@ func TestIssuesToTasks_EqualEstimatesValid(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Task with equal estimates",
 			State:        "open",
-			LowEstimate:  4,
-			HighEstimate: 4,
-			HasEstimates: true,
+			LowEstimate:  ptr(4),
+			HighEstimate: ptr(4),
 		},
 	}
 
@@ -572,6 +592,26 @@ func TestIssuesToTasks_EqualEstimatesValid(t *testing.T) {
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues (equal estimates are valid), got %d: %+v", len(schedIssues), schedIssues)
+	}
+}
+
+func TestIssuesToTasks_ZeroEstimatesValid(t *testing.T) {
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     1,
+			Title:        "Task with zero estimates",
+			State:        "open",
+			LowEstimate:  ptr(0),
+			HighEstimate: ptr(0),
+		},
+	}
+
+	_, _, schedIssues := IssuesToTasks(issues)
+
+	if len(schedIssues) != 0 {
+		t.Errorf("expected 0 scheduling issues (zero is a valid estimate), got %d: %+v", len(schedIssues), schedIssues)
 	}
 }
 
@@ -584,9 +624,8 @@ func TestIssuesToTasks_OnHoldTaskNoEstimateIssue(t *testing.T) {
 			Title:            "On-hold task with missing estimate",
 			State:            "open",
 			SchedulingStatus: "On Hold",
-			LowEstimate:      0,
-			HighEstimate:     8,
-			HasEstimates:     true,
+			LowEstimate:      nil,
+			HighEstimate:     ptr(8),
 		},
 	}
 
@@ -605,9 +644,8 @@ func TestIssuesToTasks_ClosedTaskNoEstimateIssue(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Closed task with invalid estimates",
 			State:        "closed",
-			LowEstimate:  8,
-			HighEstimate: 4,
-			HasEstimates: true,
+			LowEstimate:  ptr(8),
+			HighEstimate: ptr(4),
 		},
 	}
 
@@ -627,9 +665,8 @@ func TestIssuesToTasks_DraftTaskNoEstimateIssue(t *testing.T) {
 			State:         "open",
 			IsDraft:       true,
 			ProjectItemID: "item-123",
-			LowEstimate:   8,
-			HighEstimate:  4,
-			HasEstimates:  true,
+			LowEstimate:   ptr(8),
+			HighEstimate:  ptr(4),
 		},
 	}
 
@@ -640,7 +677,7 @@ func TestIssuesToTasks_DraftTaskNoEstimateIssue(t *testing.T) {
 	}
 }
 
-func TestIssuesToTasks_BothEstimatesZeroGetsDefaults(t *testing.T) {
+func TestIssuesToTasks_BothEstimatesNilReportsMissingAndGetsDefaults(t *testing.T) {
 	issues := map[string]IssueWithProject{
 		"github.com/owner/repo/issues/1": {
 			Owner:        "owner",
@@ -648,20 +685,25 @@ func TestIssuesToTasks_BothEstimatesZeroGetsDefaults(t *testing.T) {
 			IssueNum:     1,
 			Title:        "Task with no estimates",
 			State:        "open",
-			LowEstimate:  0,
-			HighEstimate: 0,
-			HasEstimates: false,
+			LowEstimate:  nil,
+			HighEstimate: nil,
 		},
 	}
 
 	tasks, _, schedIssues := IssuesToTasks(issues)
 
-	// Should have no scheduling issues - defaults are applied
-	if len(schedIssues) != 0 {
-		t.Errorf("expected 0 scheduling issues when both estimates are zero, got %d: %+v", len(schedIssues), schedIssues)
+	// Should report both missing estimates
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue when both estimates are nil, got %d: %+v", len(schedIssues), schedIssues)
+	}
+	if schedIssues[0].Reason != "missing_estimate" {
+		t.Errorf("expected reason 'missing_estimate', got %s", schedIssues[0].Reason)
+	}
+	if len(schedIssues[0].Details) != 2 {
+		t.Errorf("expected 2 missing fields, got %d: %v", len(schedIssues[0].Details), schedIssues[0].Details)
 	}
 
-	// Verify defaults were applied
+	// Verify defaults were still applied for scheduling
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
 	}

@@ -72,7 +72,7 @@ func PrepareUpdates(ganttData planner.GanttData, issues map[string]IssueWithProj
 			if isOnHold && !iwp.HasSchedulingDates {
 				continue
 			}
-			if isClosed && !iwp.HasSchedulingDates && !iwp.HasEstimates {
+			if isClosed && !iwp.HasSchedulingDates && iwp.LowEstimate == nil && iwp.HighEstimate == nil {
 				continue
 			}
 			reason := "on hold"

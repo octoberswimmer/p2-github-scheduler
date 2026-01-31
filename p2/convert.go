@@ -52,17 +52,21 @@ func IssuesToTasks(issues map[string]IssueWithProject) ([]planner.Task, []recfil
 		}
 
 		task := planner.Task{
-			ID:           taskID,
-			Sequence:     lseq.SequentialString(i, "scheduler"),
-			Name:         iwp.Title,
-			Ref:          []string{ref},
-			Done:         strings.EqualFold(iwp.State, "closed"),
-			EstimateLow:  iwp.LowEstimate,
-			EstimateHigh: iwp.HighEstimate,
+			ID:       taskID,
+			Sequence: lseq.SequentialString(i, "scheduler"),
+			Name:     iwp.Title,
+			Ref:      []string{ref},
+			Done:     strings.EqualFold(iwp.State, "closed"),
+		}
+		if iwp.LowEstimate != nil {
+			task.EstimateLow = *iwp.LowEstimate
+		}
+		if iwp.HighEstimate != nil {
+			task.EstimateHigh = *iwp.HighEstimate
 		}
 
 		// Default estimates if not set
-		if task.EstimateLow == 0 && task.EstimateHigh == 0 && !task.Done {
+		if iwp.LowEstimate == nil && iwp.HighEstimate == nil && !task.Done {
 			task.EstimateLow = 1
 			task.EstimateHigh = 4
 		}
@@ -153,12 +157,12 @@ func IssuesToTasks(issues map[string]IssueWithProject) ([]planner.Task, []recfil
 					Details:  details,
 				})
 			}
-			// Check for missing estimates (only if not both zero, which gets defaulted)
+			// Check for missing estimates (nil means not set)
 			var missingEstimates []string
-			if task.EstimateLow == 0 && task.EstimateHigh > 0 {
+			if iwp.LowEstimate == nil {
 				missingEstimates = append(missingEstimates, "Low Estimate")
 			}
-			if task.EstimateHigh == 0 && task.EstimateLow > 0 {
+			if iwp.HighEstimate == nil {
 				missingEstimates = append(missingEstimates, "High Estimate")
 			}
 			if len(missingEstimates) > 0 {
@@ -171,15 +175,15 @@ func IssuesToTasks(issues map[string]IssueWithProject) ([]planner.Task, []recfil
 					Details:  missingEstimates,
 				})
 			}
-			// Check for invalid estimates (high must be >= low)
-			if task.EstimateLow > 0 && task.EstimateHigh > 0 && task.EstimateHigh < task.EstimateLow {
+			// Check for invalid estimates (high must be >= low, only when both are set)
+			if iwp.LowEstimate != nil && iwp.HighEstimate != nil && *iwp.HighEstimate < *iwp.LowEstimate {
 				schedIssues = append(schedIssues, SchedulingIssue{
 					IssueRef: ref,
 					IssueNum: iwp.IssueNum,
 					Owner:    iwp.Owner,
 					Repo:     iwp.Repo,
 					Reason:   "invalid_estimate",
-					Details:  []string{fmt.Sprintf("High Estimate (%.1f) must be greater than or equal to Low Estimate (%.1f)", task.EstimateHigh, task.EstimateLow)},
+					Details:  []string{fmt.Sprintf("High Estimate (%.1f) must be greater than or equal to Low Estimate (%.1f)", *iwp.HighEstimate, *iwp.LowEstimate)},
 				})
 			}
 		}

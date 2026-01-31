@@ -115,9 +115,8 @@ func TestPrepareUpdates_OnHoldWithOnlyEstimatesSkipped(t *testing.T) {
 			State:            "open",
 			SchedulingStatus: "On Hold",
 			Project:          projectInfo,
-			LowEstimate:      2,
-			HighEstimate:     8,
-			HasEstimates:     true,
+			LowEstimate:      ptr(2),
+			HighEstimate:     ptr(8),
 			// HasSchedulingDates is false - no dates set
 		},
 	}
@@ -306,9 +305,8 @@ func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
 			Title:        "Closed Task With Estimates",
 			State:        "closed",
 			Project:      projectInfo,
-			LowEstimate:  2,
-			HighEstimate: 8,
-			HasEstimates: true, // has estimates to clear (no dates)
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(8), // has estimates to clear (no dates)
 		},
 		"github.com/owner/repo/issues/2": {
 			Owner:    "owner",
@@ -439,7 +437,8 @@ func TestPrepareUpdates_ClosedDetectedFromGitHubNotGantt(t *testing.T) {
 			Title:        "Closed Task With Estimates",
 			State:        "closed",
 			Project:      projectInfo,
-			HasEstimates: true,
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(8),
 		},
 	}
 
