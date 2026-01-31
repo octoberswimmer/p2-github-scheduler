@@ -1360,6 +1360,44 @@ func TestIssuesToTasks_OnHoldTaskNoSchedulingIssue(t *testing.T) {
 	}
 }
 
+func TestIssuesToTasks_DetectsInaccessibleBlockers(t *testing.T) {
+	issues := map[string]issueWithProject{
+		"github.com/owner/repo/issues/1": {
+			owner:                "owner",
+			repo:                 "repo",
+			issueNum:             1,
+			title:                "Task with inaccessible blocker",
+			state:                "open",
+			inaccessibleBlockers: 2,
+		},
+		"github.com/owner/repo/issues/2": {
+			owner:    "owner",
+			repo:     "repo",
+			issueNum: 2,
+			title:    "Normal task",
+			state:    "open",
+		},
+	}
+
+	_, _, schedIssues := issuesToTasks(issues)
+
+	// Should have 1 scheduling issue for inaccessible blockers
+	if len(schedIssues) != 1 {
+		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
+	}
+
+	si := schedIssues[0]
+	if si.reason != "inaccessible_dependency" {
+		t.Errorf("expected reason 'inaccessible_dependency', got %q", si.reason)
+	}
+	if si.issueNum != 1 {
+		t.Errorf("expected issue #1, got #%d", si.issueNum)
+	}
+	if !strings.Contains(si.details[0], "2 blocker(s)") {
+		t.Errorf("expected details to mention '2 blocker(s)', got %v", si.details)
+	}
+}
+
 func TestExtractCycleIssues(t *testing.T) {
 	issues := map[string]issueWithProject{
 		"github.com/owner/repo/issues/1": {

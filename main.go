@@ -264,26 +264,27 @@ type urlInfo struct {
 }
 
 type issueWithProject struct {
-	owner              string
-	repo               string
-	issueNum           int
-	title              string
-	body               string
-	state              string
-	assignee           string
-	labels             []string
-	milestone          string
-	project            *github.ProjectItemInfo
-	lowEstimate        float64
-	highEstimate       float64
-	order              int
-	schedulingStatus   string            // "On Hold", etc. from Scheduling Status field
-	hasSchedulingDates bool              // true if any scheduling date fields are set
-	hasEstimates       bool              // true if Low Estimate or High Estimate are set
-	blockedBy          []github.IssueRef // issues that block this one
-	blocking           []github.IssueRef // issues that this one blocks
-	isDraft            bool              // true if this is a draft issue
-	projectItemID      string            // project item node ID (used as ID for drafts)
+	owner                string
+	repo                 string
+	issueNum             int
+	title                string
+	body                 string
+	state                string
+	assignee             string
+	labels               []string
+	milestone            string
+	project              *github.ProjectItemInfo
+	lowEstimate          float64
+	highEstimate         float64
+	order                int
+	schedulingStatus     string            // "On Hold", etc. from Scheduling Status field
+	hasSchedulingDates   bool              // true if any scheduling date fields are set
+	hasEstimates         bool              // true if Low Estimate or High Estimate are set
+	blockedBy            []github.IssueRef // issues that block this one
+	blocking             []github.IssueRef // issues that this one blocks
+	inaccessibleBlockers int               // count of blockers from inaccessible repos
+	isDraft              bool              // true if this is a draft issue
+	projectItemID        string            // project item node ID (used as ID for drafts)
 }
 
 type dateUpdate struct {
@@ -387,6 +388,7 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 	fmt.Printf("Found %d items in project\n", len(items))
 
 	allIssues := make(map[string]issueWithProject)
+	var inaccessibleItems []string
 
 	// Track position for ordering (GraphQL returns items in display order)
 	position := 0
@@ -403,7 +405,7 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 			logrus.Debugf("Including draft issue as on-hold: %s", item.Title)
 		} else if item.Title != "" {
 			// Item has a title but no content - likely from an inaccessible repo
-			logrus.Warnf("Skipping inaccessible item %q: grant access to its repository", item.Title)
+			inaccessibleItems = append(inaccessibleItems, item.Title)
 			continue
 		} else {
 			// Skip items with no useful content
@@ -453,26 +455,27 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 		}
 
 		allIssues[ref] = issueWithProject{
-			owner:              item.RepoOwner,
-			repo:               item.RepoName,
-			issueNum:           item.IssueNumber,
-			title:              item.Title,
-			body:               item.Body,
-			state:              item.State,
-			assignee:           assignee,
-			labels:             item.Labels,
-			milestone:          item.Milestone,
-			project:            projectInfo,
-			lowEstimate:        lowEstimate,
-			highEstimate:       highEstimate,
-			order:              position,
-			schedulingStatus:   schedulingStatus,
-			hasSchedulingDates: hasSchedulingDates,
-			hasEstimates:       hasEstimates,
-			blockedBy:          item.BlockedBy,
-			blocking:           item.Blocking,
-			isDraft:            isDraft,
-			projectItemID:      item.ID,
+			owner:                item.RepoOwner,
+			repo:                 item.RepoName,
+			issueNum:             item.IssueNumber,
+			title:                item.Title,
+			body:                 item.Body,
+			state:                item.State,
+			assignee:             assignee,
+			labels:               item.Labels,
+			milestone:            item.Milestone,
+			project:              projectInfo,
+			lowEstimate:          lowEstimate,
+			highEstimate:         highEstimate,
+			order:                position,
+			schedulingStatus:     schedulingStatus,
+			hasSchedulingDates:   hasSchedulingDates,
+			hasEstimates:         hasEstimates,
+			blockedBy:            item.BlockedBy,
+			blocking:             item.Blocking,
+			inaccessibleBlockers: item.InaccessibleBlockers,
+			isDraft:              isDraft,
+			projectItemID:        item.ID,
 		}
 
 		var blockedByRefs []string
@@ -483,12 +486,20 @@ func fetchProjectItems(accessToken string, info *urlInfo) (map[string]issueWithP
 		for _, b := range item.Blocking {
 			blockingRefs = append(blockingRefs, fmt.Sprintf("%s/%s#%d", b.Owner, b.Repo, b.Number))
 		}
-		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasDates=%v, hasEstimates=%v, blockedBy=%v, blocking=%v",
-			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingDates, hasEstimates, blockedByRefs, blockingRefs)
+		logrus.Debugf("Issue %s: low=%.1f, high=%.1f, order=%d, schedulingStatus=%s, hasDates=%v, hasEstimates=%v, blockedBy=%v, blocking=%v, inaccessibleBlockers=%d",
+			ref, lowEstimate, highEstimate, position, schedulingStatus, hasSchedulingDates, hasEstimates, blockedByRefs, blockingRefs, item.InaccessibleBlockers)
 		position++
 	}
 
 	buildReverseDependencies(allIssues)
+
+	if len(inaccessibleItems) > 0 {
+		fmt.Printf("\nSkipped %d inaccessible items:\n", len(inaccessibleItems))
+		for _, title := range inaccessibleItems {
+			fmt.Printf("  - %s\n", title)
+		}
+		fmt.Println("Grant the p2 GitHub App access to all repositories linked in this project.")
+	}
 
 	return allIssues, nil
 }
@@ -790,6 +801,17 @@ func issuesToTasks(issues map[string]issueWithProject) ([]planner.Task, []recfil
 					details:  onHoldDeps,
 				})
 			}
+			if iwp.inaccessibleBlockers > 0 {
+				details := []string{fmt.Sprintf("%d blocker(s) from inaccessible repositories", iwp.inaccessibleBlockers)}
+				schedIssues = append(schedIssues, schedulingIssue{
+					issueRef: ref,
+					issueNum: iwp.issueNum,
+					owner:    iwp.owner,
+					repo:     iwp.repo,
+					reason:   "inaccessible_dependency",
+					details:  details,
+				})
+			}
 		}
 
 		tasks = append(tasks, task)
@@ -1027,6 +1049,13 @@ func formatSchedulingComment(si schedulingIssue) string {
 		for _, dep := range si.details {
 			sb.WriteString(fmt.Sprintf("- %s\n", dep))
 		}
+	case "inaccessible_dependency":
+		sb.WriteString("This issue cannot be scheduled because it depends on issues from repositories the p2 GitHub App cannot access.\n\n")
+		sb.WriteString("**Details:**\n")
+		for _, detail := range si.details {
+			sb.WriteString(fmt.Sprintf("- %s\n", detail))
+		}
+		sb.WriteString("\nGrant the p2 GitHub App access to all repositories linked in this project.")
 	}
 
 	sb.WriteString("\n---\n*This comment is automatically managed by p2-github-scheduler*")
