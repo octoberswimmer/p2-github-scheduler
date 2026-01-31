@@ -8,7 +8,8 @@ branding:
 inputs:
   token-broker-url:
     description: 'URL of the p2-penny-pusher token broker'
-    required: true
+    required: false
+    default: 'https://penny-pusher.octoberswimmer.com'
   github-url:
     description: 'GitHub URL to schedule (project, repo, or issue URL). Auto-detected from issue event if not provided.'
     required: false

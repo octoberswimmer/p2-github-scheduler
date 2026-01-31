@@ -70,15 +70,12 @@ jobs:
     steps:
       - name: Schedule project
         uses: octoberswimmer/p2-github-scheduler@main
-        with:
-          token-broker-url: https://penny-pusher.octoberswimmer.com
 ```
 
 ### Workflow Inputs
 
 | Input | Required | Description |
 |-------|----------|-------------|
-| `token-broker-url` | Yes | URL of the p2-penny-pusher token broker |
 | `project-url` | No | GitHub Project URL (auto-detected from issue if not provided) |
 | `dry-run` | No | Show changes without applying (default: false) |
 | `version` | No | Release tag to install (default: latest) |
