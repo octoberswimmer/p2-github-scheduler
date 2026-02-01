@@ -340,7 +340,7 @@ func TestIssuesToTasks_DetectsOnHoldDependencies(t *testing.T) {
 	}
 }
 
-func TestIssuesToTasks_ClosedDependencyAllowed(t *testing.T) {
+func TestIssuesToTasks_ClosedDependencySkipped(t *testing.T) {
 	issues := map[string]IssueWithProject{
 		"github.com/owner/repo/issues/1": {
 			Owner:            "owner",
@@ -368,12 +368,12 @@ func TestIssuesToTasks_ClosedDependencyAllowed(t *testing.T) {
 
 	tasks, _, schedIssues := IssuesToTasks(issues)
 
-	// Should have NO scheduling issues - closed deps are allowed
+	// Should have NO scheduling issues - closed deps are satisfied
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues, got %d: %+v", len(schedIssues), schedIssues)
 	}
 
-	// The closed dependency SHOULD be in DependsOn (work can start)
+	// Closed dependencies should NOT be in DependsOn (they're already satisfied)
 	var task2 planner.Task
 	for _, task := range tasks {
 		if task.ID == "owner/repo#2" {
@@ -381,8 +381,8 @@ func TestIssuesToTasks_ClosedDependencyAllowed(t *testing.T) {
 			break
 		}
 	}
-	if len(task2.DependsOn) != 1 {
-		t.Errorf("expected 1 DependsOn for task with closed dep, got %v", task2.DependsOn)
+	if len(task2.DependsOn) != 0 {
+		t.Errorf("expected 0 DependsOn for task with closed dep (satisfied), got %v", task2.DependsOn)
 	}
 }
 

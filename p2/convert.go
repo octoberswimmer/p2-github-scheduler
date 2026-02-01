@@ -112,8 +112,14 @@ func IssuesToTasks(issues map[string]IssueWithProject) ([]planner.Task, []recfil
 				continue
 			}
 
-			// Check if the dependency is on-hold (but not closed - closed deps are ok)
-			if onHoldIssues[issueKey] && !strings.EqualFold(blockerIssue.State, "closed") {
+			// Skip closed dependencies - they're already satisfied
+			if strings.EqualFold(blockerIssue.State, "closed") {
+				logrus.Debugf("Skipping dependency %s for %s: blocker is closed", depID, task.ID)
+				continue
+			}
+
+			// Check if the dependency is on-hold
+			if onHoldIssues[issueKey] {
 				onHoldDeps = append(onHoldDeps, depID)
 				logrus.Debugf("Dependency %s for %s is on-hold", depID, task.ID)
 				// Don't add on-hold deps to DependsOn - they would block scheduling
