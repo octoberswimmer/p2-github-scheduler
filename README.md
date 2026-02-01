@@ -49,7 +49,7 @@ name: Schedule Issues
 
 on:
   issues:
-    types: [opened, edited, closed, reopened, assigned, unassigned, labeled, unlabeled]
+    types: [opened, edited, closed, reopened, assigned, unassigned]
   schedule:
     - cron: '0 6 * * *'  # Run daily at 6am UTC
   workflow_dispatch:
