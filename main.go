@@ -175,6 +175,16 @@ func run(cmd *cobra.Command, args []string) error {
 	// Prepare updates
 	updates := p2.PrepareUpdates(ganttData, allIssues, unschedulableIssues)
 
+	// Detect at-risk issues (expected completion after due date)
+	atRiskIssues := p2.DetectAtRiskIssues(updates, allIssues)
+	schedIssues = append(schedIssues, atRiskIssues...)
+
+	// Build set of all issues with scheduling notices (including at-risk warnings)
+	issuesWithNotices := make(map[string]bool)
+	for _, si := range schedIssues {
+		issuesWithNotices[si.IssueRef] = true
+	}
+
 	// Print scheduling issues
 	if len(schedIssues) > 0 {
 		fmt.Printf("\nFound %d issues with scheduling problems:\n", len(schedIssues))
@@ -246,15 +256,15 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Delete comments for issues that are now schedulable
+	// Delete comments for issues that no longer have notices
 	fmt.Println("\nCleaning up resolved scheduling comments...")
 	for ref, iwp := range allIssues {
 		// Skip draft issues
 		if iwp.IsDraft {
 			continue
 		}
-		// Skip issues that still have problems
-		if unschedulableIssues[ref] {
+		// Skip issues that still have notices (scheduling problems or at-risk warnings)
+		if issuesWithNotices[ref] {
 			continue
 		}
 		// Skip on-hold and closed issues (they don't need scheduling comments cleaned up)

@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/joho/godotenv v1.4.0
-	github.com/octoberswimmer/p2 v0.10.0
+	github.com/octoberswimmer/p2 v0.11.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
 )

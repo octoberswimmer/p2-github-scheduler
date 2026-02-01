@@ -18,6 +18,7 @@ Your GitHub Project needs the following custom fields:
 |------------|------|-------------|
 | Low Estimate | Number | Low estimate in hours (read) |
 | High Estimate | Number | High estimate in hours (read) |
+| Due Date | Date | Optional deadline for the task (read) |
 | Scheduling Status | Single select | Set to "On Hold" to exclude from scheduling (read) |
 | Expected Start | Date | Calculated start date (written) |
 | Expected Completion | Date | Mean completion date (written) |
@@ -38,6 +39,12 @@ Issues cannot be scheduled when:
 - **Invalid estimate**: The High Estimate is less than the Low Estimate
 
 Issues with scheduling problems will not have their date fields updated until the problem is resolved.
+
+Additionally, a warning comment is posted when:
+
+- **At risk**: The Expected Completion date is after the Due Date (if set)
+
+At-risk warnings do not prevent scheduling - they only warn that the deadline may be missed. The warning is automatically removed when the issue is no longer at risk.
 
 ## Manual Workflow Setup
 

@@ -2,6 +2,7 @@ package p2
 
 import (
 	"testing"
+	"time"
 
 	"github.com/octoberswimmer/p2/github"
 	"github.com/octoberswimmer/p2/planner"
@@ -844,5 +845,170 @@ func TestProjectInfoFromGetProjectFields(t *testing.T) {
 	}
 	if projectInfo.FieldIDs["Low Estimate"] != "field-4" {
 		t.Errorf("Low Estimate field ID = %q, want %q", projectInfo.FieldIDs["Low Estimate"], "field-4")
+	}
+}
+
+func TestDetectAtRiskIssues_expected_completion_after_due_date_is_at_risk(t *testing.T) {
+	dueDate := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	expectedCompletion := time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 1,
+			Title:    "Task with due date",
+			DueDate:  &dueDate,
+		},
+	}
+
+	updates := []DateUpdate{
+		{
+			Owner:              "owner",
+			Repo:               "repo",
+			IssueNum:           1,
+			ExpectedCompletion: expectedCompletion,
+		},
+	}
+
+	atRiskIssues := DetectAtRiskIssues(updates, issues)
+
+	if len(atRiskIssues) != 1 {
+		t.Fatalf("expected 1 at-risk issue, got %d", len(atRiskIssues))
+	}
+
+	if atRiskIssues[0].Reason != "at_risk" {
+		t.Errorf("expected reason 'at_risk', got %q", atRiskIssues[0].Reason)
+	}
+	if atRiskIssues[0].IssueNum != 1 {
+		t.Errorf("expected IssueNum 1, got %d", atRiskIssues[0].IssueNum)
+	}
+	if len(atRiskIssues[0].Details) != 2 {
+		t.Fatalf("expected 2 details, got %d", len(atRiskIssues[0].Details))
+	}
+	if atRiskIssues[0].Details[0] != "Due Date: 2025-03-01" {
+		t.Errorf("expected first detail to be due date, got %q", atRiskIssues[0].Details[0])
+	}
+	if atRiskIssues[0].Details[1] != "Expected Completion: 2025-03-15" {
+		t.Errorf("expected second detail to be expected completion, got %q", atRiskIssues[0].Details[1])
+	}
+}
+
+func TestDetectAtRiskIssues_expected_completion_before_due_date_is_not_at_risk(t *testing.T) {
+	dueDate := time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)
+	expectedCompletion := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 1,
+			Title:    "Task with due date",
+			DueDate:  &dueDate,
+		},
+	}
+
+	updates := []DateUpdate{
+		{
+			Owner:              "owner",
+			Repo:               "repo",
+			IssueNum:           1,
+			ExpectedCompletion: expectedCompletion,
+		},
+	}
+
+	atRiskIssues := DetectAtRiskIssues(updates, issues)
+
+	if len(atRiskIssues) != 0 {
+		t.Fatalf("expected 0 at-risk issues, got %d", len(atRiskIssues))
+	}
+}
+
+func TestDetectAtRiskIssues_no_due_date_is_not_at_risk(t *testing.T) {
+	expectedCompletion := time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 1,
+			Title:    "Task without due date",
+			DueDate:  nil,
+		},
+	}
+
+	updates := []DateUpdate{
+		{
+			Owner:              "owner",
+			Repo:               "repo",
+			IssueNum:           1,
+			ExpectedCompletion: expectedCompletion,
+		},
+	}
+
+	atRiskIssues := DetectAtRiskIssues(updates, issues)
+
+	if len(atRiskIssues) != 0 {
+		t.Fatalf("expected 0 at-risk issues, got %d", len(atRiskIssues))
+	}
+}
+
+func TestDetectAtRiskIssues_cleared_dates_not_at_risk(t *testing.T) {
+	dueDate := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 1,
+			Title:    "On-hold task",
+			DueDate:  &dueDate,
+		},
+	}
+
+	updates := []DateUpdate{
+		{
+			Owner:       "owner",
+			Repo:        "repo",
+			IssueNum:    1,
+			ClearDates:  true,
+			ClearReason: "on hold",
+		},
+	}
+
+	atRiskIssues := DetectAtRiskIssues(updates, issues)
+
+	if len(atRiskIssues) != 0 {
+		t.Fatalf("expected 0 at-risk issues for cleared dates, got %d", len(atRiskIssues))
+	}
+}
+
+func TestDetectAtRiskIssues_expected_completion_equal_to_due_date_is_not_at_risk(t *testing.T) {
+	dueDate := time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)
+	expectedCompletion := time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 1,
+			Title:    "Task with due date",
+			DueDate:  &dueDate,
+		},
+	}
+
+	updates := []DateUpdate{
+		{
+			Owner:              "owner",
+			Repo:               "repo",
+			IssueNum:           1,
+			ExpectedCompletion: expectedCompletion,
+		},
+	}
+
+	atRiskIssues := DetectAtRiskIssues(updates, issues)
+
+	if len(atRiskIssues) != 0 {
+		t.Fatalf("expected 0 at-risk issues when completion equals due date, got %d", len(atRiskIssues))
 	}
 }

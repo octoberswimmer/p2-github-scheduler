@@ -101,3 +101,28 @@ func TestFormatSchedulingComment_InvalidEstimate(t *testing.T) {
 		t.Error("comment should contain the detail message")
 	}
 }
+
+func TestFormatSchedulingComment_AtRisk(t *testing.T) {
+	si := p2.SchedulingIssue{
+		Reason:  "at_risk",
+		Details: []string{"Due Date: 2025-03-01", "Expected Completion: 2025-03-15"},
+	}
+
+	comment := FormatSchedulingComment(si)
+
+	if !strings.Contains(comment, SchedulingCommentMarker) {
+		t.Error("comment should contain the marker")
+	}
+	if !strings.Contains(comment, "at risk") {
+		t.Error("comment should mention at risk")
+	}
+	if !strings.Contains(comment, "due date") {
+		t.Error("comment should mention due date")
+	}
+	if !strings.Contains(comment, "Due Date: 2025-03-01") {
+		t.Error("comment should contain the due date")
+	}
+	if !strings.Contains(comment, "Expected Completion: 2025-03-15") {
+		t.Error("comment should contain the expected completion date")
+	}
+}

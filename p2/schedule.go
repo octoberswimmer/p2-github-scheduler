@@ -8,6 +8,48 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// DetectAtRiskIssues identifies issues where expected completion is after the due date
+func DetectAtRiskIssues(updates []DateUpdate, issues map[string]IssueWithProject) []SchedulingIssue {
+	var atRiskIssues []SchedulingIssue
+
+	for _, update := range updates {
+		// Skip updates that are clearing dates (closed/on-hold)
+		if update.ClearDates {
+			continue
+		}
+
+		// Find the corresponding issue
+		ref := fmt.Sprintf("github.com/%s/%s/issues/%d", update.Owner, update.Repo, update.IssueNum)
+		iwp, ok := issues[ref]
+		if !ok {
+			continue
+		}
+
+		// Skip if no due date set
+		if iwp.DueDate == nil {
+			continue
+		}
+
+		// Check if expected completion is after due date
+		if !update.ExpectedCompletion.IsZero() && update.ExpectedCompletion.After(*iwp.DueDate) {
+			details := []string{
+				fmt.Sprintf("Due Date: %s", iwp.DueDate.Format("2006-01-02")),
+				fmt.Sprintf("Expected Completion: %s", update.ExpectedCompletion.Format("2006-01-02")),
+			}
+			atRiskIssues = append(atRiskIssues, SchedulingIssue{
+				IssueRef: ref,
+				IssueNum: iwp.IssueNum,
+				Owner:    iwp.Owner,
+				Repo:     iwp.Repo,
+				Reason:   "at_risk",
+				Details:  details,
+			})
+		}
+	}
+
+	return atRiskIssues
+}
+
 // ExtractCycleIssues checks scheduler results for dependency cycles and adds them to scheduling issues
 func ExtractCycleIssues(entries planner.ScheduledEntries, issues map[string]IssueWithProject, existing []SchedulingIssue) []SchedulingIssue {
 	// Build a set of issues that already have scheduling issues (avoid duplicates)

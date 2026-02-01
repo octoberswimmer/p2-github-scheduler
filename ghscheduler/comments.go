@@ -57,6 +57,11 @@ func FormatSchedulingComment(si github.SchedulingIssue) string {
 		for _, detail := range si.Details {
 			sb.WriteString(fmt.Sprintf("%s\n", detail))
 		}
+	case "at_risk":
+		sb.WriteString("**Warning:** This issue is at risk of missing its due date.\n\n")
+		for _, detail := range si.Details {
+			sb.WriteString(fmt.Sprintf("%s\n", detail))
+		}
 	}
 
 	sb.WriteString("\n---\n*This comment is automatically managed by p2-github-scheduler*")
