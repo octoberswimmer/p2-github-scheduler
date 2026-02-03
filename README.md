@@ -10,6 +10,8 @@ A GitHub Action that automatically reschedules GitHub Issues using p2's scheduli
 
 That's it! Issues will be automatically rescheduled whenever they are updated.
 
+See the [demo project](https://github.com/orgs/octoberswimmer/projects/4/views/4) for an example.
+
 ## GitHub Project Setup
 
 Your GitHub Project needs the following custom fields:
