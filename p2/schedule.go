@@ -3,10 +3,19 @@ package p2
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/octoberswimmer/p2/planner"
 	"github.com/sirupsen/logrus"
 )
+
+// sameDate returns true if the existing date matches the new date (comparing only the date portion)
+func sameDate(existing *time.Time, new time.Time) bool {
+	if existing == nil {
+		return new.IsZero()
+	}
+	return existing.Format("2006-01-02") == new.Format("2006-01-02")
+}
 
 // DetectAtRiskIssues identifies issues where expected completion is after the due date
 func DetectAtRiskIssues(updates []DateUpdate, issues map[string]IssueWithProject) []SchedulingIssue {
@@ -197,6 +206,14 @@ func PrepareUpdates(ganttData planner.GanttData, issues map[string]IssueWithProj
 		// Skip issues with scheduling problems (don't write dates)
 		ref := fmt.Sprintf("github.com/%s/%s/issues/%d", iwp.Owner, iwp.Repo, iwp.IssueNum)
 		if unschedulable[ref] {
+			continue
+		}
+
+		// Skip if all dates are unchanged
+		if sameDate(iwp.ExpectedStart, bar.ExpStartDate) &&
+			sameDate(iwp.ExpectedCompletion, bar.MeanDate) &&
+			sameDate(iwp.Completion98, bar.End98Date) {
+			logrus.Debugf("Dates unchanged for %s, skipping", bar.ID)
 			continue
 		}
 

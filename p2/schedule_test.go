@@ -8,6 +8,15 @@ import (
 	"github.com/octoberswimmer/p2/planner"
 )
 
+var (
+	testStart  = time.Date(2026, 2, 5, 0, 0, 0, 0, time.UTC)
+	testMean   = time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC)
+	testEnd98  = time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)
+	otherStart = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	otherMean  = time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC)
+	otherEnd98 = time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+)
+
 func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 	// Create a mock project info
 	projectInfo := &github.ProjectItemInfo{
@@ -51,8 +60,11 @@ func TestPrepareUpdates_OnHoldTasksGetCleared(t *testing.T) {
 				OnHold: true,
 			},
 			{
-				ID:   "owner/repo#2",
-				Name: "Active Task",
+				ID:           "owner/repo#2",
+				Name:         "Active Task",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
 			},
 		},
 	}
@@ -182,8 +194,11 @@ func TestPrepareUpdates_ClosedTasksGetCleared(t *testing.T) {
 				Done: true,
 			},
 			{
-				ID:   "owner/repo#2",
-				Name: "Open Task",
+				ID:           "owner/repo#2",
+				Name:         "Open Task",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
 			},
 		},
 	}
@@ -265,8 +280,11 @@ func TestPrepareUpdates_ClosedTasksWithoutDatesSkipped(t *testing.T) {
 				Done: true,
 			},
 			{
-				ID:   "owner/repo#2",
-				Name: "Open Task",
+				ID:           "owner/repo#2",
+				Name:         "Open Task",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
 			},
 		},
 	}
@@ -328,8 +346,11 @@ func TestPrepareUpdates_ClosedTasksWithEstimatesGetCleared(t *testing.T) {
 				Done: true,
 			},
 			{
-				ID:   "owner/repo#2",
-				Name: "Open Task",
+				ID:           "owner/repo#2",
+				Name:         "Open Task",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
 			},
 		},
 	}
@@ -506,8 +527,11 @@ func TestPrepareUpdates_DifferentReposSameIssueNumber(t *testing.T) {
 				Done: true,
 			},
 			{
-				ID:   "owner/repo-b#2",
-				Name: "Open Task In Repo B",
+				ID:           "owner/repo-b#2",
+				Name:         "Open Task In Repo B",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
 			},
 		},
 	}
@@ -611,8 +635,8 @@ func TestPrepareUpdates_MultipleReposWithOverlappingIssueNumbers(t *testing.T) {
 			{ID: "owner/aer-dist#1", Name: "aer-dist #1 (closed)", Done: true},
 			{ID: "owner/aer-dist#2", Name: "aer-dist #2 (closed)", Done: true},
 			{ID: "owner/aer-dist#4", Name: "aer-dist #4 (closed)", Done: true},
-			{ID: "owner/a2b#2", Name: "a2b #2 (open)"},
-			{ID: "owner/a2b#4", Name: "a2b #4 (open)"},
+			{ID: "owner/a2b#2", Name: "a2b #2 (open)", ExpStartDate: testStart, MeanDate: testMean, End98Date: testEnd98},
+			{ID: "owner/a2b#4", Name: "a2b #4 (open)", ExpStartDate: otherStart, MeanDate: otherMean, End98Date: otherEnd98},
 		},
 	}
 
@@ -801,6 +825,117 @@ func TestPrepareUpdates_UnschedulableNoDatesNoClear(t *testing.T) {
 	// Should have no updates - no dates to clear
 	if len(updates) != 0 {
 		t.Fatalf("expected 0 updates (no dates to clear), got %d", len(updates))
+	}
+}
+
+func TestPrepareUpdates_UnchangedDatesSkipped(t *testing.T) {
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:              "owner",
+			Repo:               "repo",
+			IssueNum:           1,
+			Title:              "Task with unchanged dates",
+			State:              "open",
+			Project:            projectInfo,
+			HasSchedulingDates: true,
+			ExpectedStart:      &testStart,
+			ExpectedCompletion: &testMean,
+			Completion98:       &testEnd98,
+		},
+		"github.com/owner/repo/issues/2": {
+			Owner:              "owner",
+			Repo:               "repo",
+			IssueNum:           2,
+			Title:              "Task with changed dates",
+			State:              "open",
+			Project:            projectInfo,
+			HasSchedulingDates: true,
+			ExpectedStart:      &testStart,
+			ExpectedCompletion: &testMean,
+			Completion98:       &testEnd98,
+		},
+	}
+
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:           "owner/repo#1",
+				Name:         "Task with unchanged dates",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
+			},
+			{
+				ID:           "owner/repo#2",
+				Name:         "Task with changed dates",
+				ExpStartDate: otherStart,
+				MeanDate:     otherMean,
+				End98Date:    otherEnd98,
+			},
+		},
+	}
+
+	updates := PrepareUpdates(ganttData, issues, nil)
+
+	// Should have only 1 update - the task with changed dates
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+
+	if updates[0].IssueNum != 2 {
+		t.Errorf("expected update for issue #2, got #%d", updates[0].IssueNum)
+	}
+}
+
+func TestPrepareUpdates_NewDatesNotSkipped(t *testing.T) {
+	projectInfo := &github.ProjectItemInfo{
+		ProjectID: "proj-1",
+		ItemID:    "item-1",
+		FieldIDs: map[string]string{
+			"Expected Start":      "field-1",
+			"Expected Completion": "field-2",
+			"98% Completion":      "field-3",
+		},
+	}
+
+	// Issue has no existing dates
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 1,
+			Title:    "Task without dates",
+			State:    "open",
+			Project:  projectInfo,
+		},
+	}
+
+	ganttData := planner.GanttData{
+		Bars: []planner.GanttBar{
+			{
+				ID:           "owner/repo#1",
+				Name:         "Task without dates",
+				ExpStartDate: testStart,
+				MeanDate:     testMean,
+				End98Date:    testEnd98,
+			},
+		},
+	}
+
+	updates := PrepareUpdates(ganttData, issues, nil)
+
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update for new dates, got %d", len(updates))
 	}
 }
 
