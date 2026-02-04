@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -93,6 +96,10 @@ func run(cmd *cobra.Command, args []string) error {
 			}
 		}
 		accessToken = auth.AccessToken
+	}
+
+	if debug {
+		logInstallationRepos(accessToken)
 	}
 
 	// Parse the URL to determine what we're working with
@@ -280,6 +287,46 @@ func run(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Done!")
 	return nil
+}
+
+func logInstallationRepos(token string) {
+	req, err := http.NewRequest("GET", "https://api.github.com/installation/repositories?per_page=100", nil)
+	if err != nil {
+		logrus.Debugf("Failed to create installation repos request: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logrus.Debugf("Failed to list installation repos: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		logrus.Debugf("Installation repos API returned %d: %s", resp.StatusCode, string(body))
+		return
+	}
+
+	var result struct {
+		TotalCount   int `json:"total_count"`
+		Repositories []struct {
+			FullName string `json:"full_name"`
+			Private  bool   `json:"private"`
+		} `json:"repositories"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		logrus.Debugf("Failed to decode installation repos: %v", err)
+		return
+	}
+
+	logrus.Debugf("Installation token has access to %d repos:", result.TotalCount)
+	for _, r := range result.Repositories {
+		logrus.Debugf("  %s (private=%v)", r.FullName, r.Private)
+	}
 }
 
 func runDeviceFlow() (*github.StoredAuth, error) {

@@ -21,6 +21,10 @@ inputs:
     description: 'Timezone for scheduling (e.g. America/New_York, Europe/London). Defaults to UTC.'
     required: false
     default: 'UTC'
+  debug:
+    description: 'Enable debug logging'
+    required: false
+    default: 'false'
   version:
     description: 'Release tag of p2-github-scheduler to install (e.g. v1.0.0). Use "latest" to resolve dynamically.'
     required: false
@@ -97,7 +101,10 @@ runs:
 
         ARGS=""
         if [ "${{ inputs.dry-run }}" = "true" ]; then
-          ARGS="--dry-run"
+          ARGS="$ARGS --dry-run"
+        fi
+        if [ "${{ inputs.debug }}" = "true" ]; then
+          ARGS="$ARGS --debug"
         fi
 
         p2-github-scheduler $ARGS "$GITHUB_URL"
