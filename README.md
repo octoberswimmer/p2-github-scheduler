@@ -10,6 +10,8 @@ A GitHub Action that automatically reschedules GitHub Issues using p2's scheduli
 
 That's it! Issues will be automatically rescheduled whenever they are updated.
 
+When the p2 GitHub App is installed, it creates an initial GitHub Project for you. That project and any new projects you create will automatically have p2's scheduling fields set up.
+
 See the [demo project](https://github.com/orgs/octoberswimmer/projects/4/views/4) for an example.
 
 ## GitHub Project Setup
