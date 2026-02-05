@@ -28,6 +28,8 @@ Your GitHub Project needs the following custom fields:
 | Expected Completion | Date | Mean completion date (written) |
 | 98% Completion | Date | 98th percentile completion date (written) |
 
+See [How to Estimate](https://www.octoberswimmer.com/tools/p2/docs/how-to-estimate/) for guidance on setting Low and High ranges.
+
 Tasks with Scheduling Status set to "On Hold" will have their date fields cleared.
 
 ## Scheduling Warnings
