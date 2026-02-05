@@ -2,14 +2,76 @@ package p2
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/octoberswimmer/p2/planner"
 	"github.com/octoberswimmer/p2/planner/lseq"
 	"github.com/octoberswimmer/p2/recfile"
 	"github.com/sirupsen/logrus"
 )
+
+type semver struct {
+	major int
+	minor int
+	patch int
+}
+
+var semverPattern = regexp.MustCompile(`(?i)v?(\d+)\.(\d+)\.(\d+)`)
+
+func parseSemver(s string) (semver, bool) {
+	matches := semverPattern.FindStringSubmatch(s)
+	if len(matches) != 4 {
+		return semver{}, false
+	}
+	major, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return semver{}, false
+	}
+	minor, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return semver{}, false
+	}
+	patch, err := strconv.Atoi(matches[3])
+	if err != nil {
+		return semver{}, false
+	}
+	return semver{major: major, minor: minor, patch: patch}, true
+}
+
+func compareSemver(a, b semver) int {
+	if a.major != b.major {
+		if a.major < b.major {
+			return -1
+		}
+		return 1
+	}
+	if a.minor != b.minor {
+		if a.minor < b.minor {
+			return -1
+		}
+		return 1
+	}
+	if a.patch != b.patch {
+		if a.patch < b.patch {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+type packageInfo struct {
+	id         string
+	hasDueDate bool
+	dueDate    time.Time
+	hasSemver  bool
+	semver     semver
+	firstOrder int
+}
 
 // IssuesToTasks converts GitHub issues to planner tasks.
 // If privacy is non-nil, private repo information is redacted in log output.
@@ -39,6 +101,63 @@ func IssuesToTasks(issues map[string]IssueWithProject, privacy *PrivacyFilter) (
 	sort.Slice(sortedIssues, func(i, j int) bool {
 		return sortedIssues[i].iwp.Order < sortedIssues[j].iwp.Order
 	})
+
+	// Build package ordering: due date (earliest first), then semver if present, then project order.
+	packageInfos := make(map[string]*packageInfo)
+	for i, ri := range sortedIssues {
+		pkgID := ri.iwp.Milestone
+		if pkgID == "" {
+			continue
+		}
+
+		info, ok := packageInfos[pkgID]
+		if !ok {
+			info = &packageInfo{id: pkgID, firstOrder: i}
+			if sv, ok := parseSemver(pkgID); ok {
+				info.hasSemver = true
+				info.semver = sv
+			}
+			packageInfos[pkgID] = info
+		}
+
+		if ri.iwp.MilestoneDueDate != nil {
+			if !info.hasDueDate || ri.iwp.MilestoneDueDate.Before(info.dueDate) {
+				info.hasDueDate = true
+				info.dueDate = *ri.iwp.MilestoneDueDate
+			}
+		}
+	}
+
+	var orderedPackages []*packageInfo
+	for _, info := range packageInfos {
+		orderedPackages = append(orderedPackages, info)
+	}
+	sort.Slice(orderedPackages, func(i, j int) bool {
+		a := orderedPackages[i]
+		b := orderedPackages[j]
+
+		if a.hasDueDate != b.hasDueDate {
+			return a.hasDueDate
+		}
+		if a.hasDueDate && b.hasDueDate && !a.dueDate.Equal(b.dueDate) {
+			return a.dueDate.Before(b.dueDate)
+		}
+		if a.hasSemver && b.hasSemver {
+			if cmp := compareSemver(a.semver, b.semver); cmp != 0 {
+				return cmp < 0
+			}
+		}
+		if a.hasSemver != b.hasSemver {
+			return a.hasSemver
+		}
+		return a.firstOrder < b.firstOrder
+	})
+
+	packageOrder := make(map[string]int, len(orderedPackages))
+	for i, info := range orderedPackages {
+		packageOrder[info.id] = i
+	}
+	unpackagedOrder := len(packageOrder)
 
 	for i, ri := range sortedIssues {
 		ref := ri.ref
@@ -92,8 +211,18 @@ func IssuesToTasks(issues map[string]IssueWithProject, privacy *PrivacyFilter) (
 		}
 
 		// Extract milestone as package
-		if iwp.Milestone != "" {
-			task.PackageID = iwp.Milestone
+		pkgID := iwp.Milestone
+		if pkgID != "" {
+			task.PackageID = pkgID
+		}
+
+		// Ensure milestone packages are ordered above unpackaged tasks
+		if pkgID == "" {
+			task.PackageOrder = unpackagedOrder
+		} else if order, ok := packageOrder[pkgID]; ok {
+			task.PackageOrder = order
+		} else {
+			task.PackageOrder = unpackagedOrder
 		}
 
 		// Track scheduling issues for this task

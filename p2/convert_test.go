@@ -3,6 +3,7 @@ package p2
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/octoberswimmer/p2/github"
 	"github.com/octoberswimmer/p2/planner"
@@ -135,6 +136,180 @@ func TestIssuesToTasks_PreservesOrder(t *testing.T) {
 		if task.Name != expectedOrder[i] {
 			t.Errorf("task %d: expected name %q, got %q", i, expectedOrder[i], task.Name)
 		}
+	}
+}
+
+func TestIssuesToTasks_PackageOrderFollowsProjectOrder(t *testing.T) {
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:     "owner",
+			Repo:      "repo",
+			IssueNum:  1,
+			Title:     "First Task",
+			State:     "open",
+			Order:     0,
+			Milestone: "v1",
+		},
+		"github.com/owner/repo/issues/2": {
+			Owner:    "owner",
+			Repo:     "repo",
+			IssueNum: 2,
+			Title:    "Second Task",
+			State:    "open",
+			Order:    1,
+			// no milestone
+		},
+		"github.com/owner/repo/issues/3": {
+			Owner:     "owner",
+			Repo:      "repo",
+			IssueNum:  3,
+			Title:     "Third Task",
+			State:     "open",
+			Order:     2,
+			Milestone: "v1",
+		},
+		"github.com/owner/repo/issues/4": {
+			Owner:     "owner",
+			Repo:      "repo",
+			IssueNum:  4,
+			Title:     "Fourth Task",
+			State:     "open",
+			Order:     3,
+			Milestone: "v2",
+		},
+	}
+
+	tasks, _, _ := IssuesToTasks(issues, nil)
+
+	if len(tasks) != 4 {
+		t.Fatalf("expected 4 tasks, got %d", len(tasks))
+	}
+
+	type expected struct {
+		name         string
+		packageID    string
+		packageOrder int
+	}
+
+	expectedOrder := []expected{
+		{name: "First Task", packageID: "v1", packageOrder: 0},
+		{name: "Second Task", packageID: "", packageOrder: 2},
+		{name: "Third Task", packageID: "v1", packageOrder: 0},
+		{name: "Fourth Task", packageID: "v2", packageOrder: 1},
+	}
+
+	for i, exp := range expectedOrder {
+		task := tasks[i]
+		if task.Name != exp.name {
+			t.Fatalf("task %d: expected name %q, got %q", i, exp.name, task.Name)
+		}
+		if task.PackageID != exp.packageID {
+			t.Errorf("task %q: expected PackageID %q, got %q", task.Name, exp.packageID, task.PackageID)
+		}
+		if task.PackageOrder != exp.packageOrder {
+			t.Errorf("task %q: expected PackageOrder %d, got %d", task.Name, exp.packageOrder, task.PackageOrder)
+		}
+	}
+}
+
+func TestIssuesToTasks_PackageOrderByDueDate(t *testing.T) {
+	dueEarly := time.Date(2026, 2, 8, 0, 0, 0, 0, time.UTC)
+	dueLate := time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC)
+
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:            "owner",
+			Repo:             "repo",
+			IssueNum:         1,
+			Title:            "Late Milestone Task",
+			State:            "open",
+			Order:            0,
+			Milestone:        "v0.0.106",
+			MilestoneDueDate: &dueLate,
+		},
+		"github.com/owner/repo/issues/2": {
+			Owner:            "owner",
+			Repo:             "repo",
+			IssueNum:         2,
+			Title:            "Early Milestone Task",
+			State:            "open",
+			Order:            1,
+			Milestone:        "v0.0.105",
+			MilestoneDueDate: &dueEarly,
+		},
+	}
+
+	tasks, _, _ := IssuesToTasks(issues, nil)
+
+	var lateTask, earlyTask *planner.Task
+	for i := range tasks {
+		if tasks[i].Name == "Late Milestone Task" {
+			lateTask = &tasks[i]
+		} else if tasks[i].Name == "Early Milestone Task" {
+			earlyTask = &tasks[i]
+		}
+	}
+
+	if lateTask == nil || earlyTask == nil {
+		t.Fatalf("expected tasks not found")
+	}
+
+	if earlyTask.PackageOrder >= lateTask.PackageOrder {
+		t.Errorf("expected early due milestone before late due milestone, got orders %d and %d", earlyTask.PackageOrder, lateTask.PackageOrder)
+	}
+}
+
+func TestIssuesToTasks_PackageOrderBySemver(t *testing.T) {
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:     "owner",
+			Repo:      "repo",
+			IssueNum:  1,
+			Title:     "v2.0.0 Task",
+			State:     "open",
+			Order:     0,
+			Milestone: "v2.0.0",
+		},
+		"github.com/owner/repo/issues/2": {
+			Owner:     "owner",
+			Repo:      "repo",
+			IssueNum:  2,
+			Title:     "v1.10.0 Task",
+			State:     "open",
+			Order:     1,
+			Milestone: "v1.10.0",
+		},
+		"github.com/owner/repo/issues/3": {
+			Owner:     "owner",
+			Repo:      "repo",
+			IssueNum:  3,
+			Title:     "v1.2.0 Task",
+			State:     "open",
+			Order:     2,
+			Milestone: "v1.2.0",
+		},
+	}
+
+	tasks, _, _ := IssuesToTasks(issues, nil)
+
+	var v2Task, v110Task, v12Task *planner.Task
+	for i := range tasks {
+		switch tasks[i].Name {
+		case "v2.0.0 Task":
+			v2Task = &tasks[i]
+		case "v1.10.0 Task":
+			v110Task = &tasks[i]
+		case "v1.2.0 Task":
+			v12Task = &tasks[i]
+		}
+	}
+
+	if v2Task == nil || v110Task == nil || v12Task == nil {
+		t.Fatalf("expected tasks not found")
+	}
+
+	if !(v12Task.PackageOrder < v110Task.PackageOrder && v110Task.PackageOrder < v2Task.PackageOrder) {
+		t.Errorf("expected semver ordering v1.2.0 < v1.10.0 < v2.0.0, got %d, %d, %d", v12Task.PackageOrder, v110Task.PackageOrder, v2Task.PackageOrder)
 	}
 }
 
