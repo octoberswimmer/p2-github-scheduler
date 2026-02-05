@@ -109,6 +109,18 @@ The installation token is scoped to only:
 
 The `issues:write` permission is required to post and manage scheduling warning comments.
 
+## Privacy
+
+When running in CI, log output automatically redacts information about private repositories that are not the current repository. This prevents leaking private repo names, issue titles, and dependency references in GitHub Actions logs.
+
+The current repository is determined from the `GITHUB_REPOSITORY` environment variable (set automatically in GitHub Actions) or from the input URL.
+
+For private repos other than the current one:
+- Repository names are replaced with `[private]`
+- Issue titles are omitted
+- Dependency references show `[private] #N` instead of `owner/repo #N`
+- Scheduling comments posted to issues also have dependency references redacted
+
 ## CLI Usage
 
 A CLI is also available for local testing and debugging:

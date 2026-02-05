@@ -145,9 +145,16 @@ func run(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Determine current repo for privacy filtering
+	currentRepo := os.Getenv("GITHUB_REPOSITORY")
+	if currentRepo == "" && urlInfo.Repo != "" {
+		currentRepo = urlInfo.Owner + "/" + urlInfo.Repo
+	}
+	privacy := p2.NewPrivacyFilter(currentRepo, allIssues)
+
 	// Convert issues to p2 tasks
 	fmt.Println("Converting to p2 tasks...")
-	tasks, users, schedIssues := p2.IssuesToTasks(allIssues)
+	tasks, users, schedIssues := p2.IssuesToTasks(allIssues, privacy)
 	fmt.Printf("Created %d tasks with %d users\n", len(tasks), len(users))
 
 	if len(tasks) == 0 {
@@ -196,9 +203,9 @@ func run(cmd *cobra.Command, args []string) error {
 	if len(schedIssues) > 0 {
 		fmt.Printf("\nFound %d issues with scheduling problems:\n", len(schedIssues))
 		for _, si := range schedIssues {
-			fmt.Printf("  %s/%s #%d: %s\n", si.Owner, si.Repo, si.IssueNum, si.Reason)
+			fmt.Printf("  %s #%d: %s\n", privacy.RedactRepo(si.Owner, si.Repo), si.IssueNum, si.Reason)
 			for _, detail := range si.Details {
-				fmt.Printf("       - %s\n", detail)
+				fmt.Printf("       - %s\n", privacy.RedactDepID(detail))
 			}
 		}
 	}
@@ -211,7 +218,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if len(updates) > 0 {
 		fmt.Printf("\nFound %d tasks with date changes:\n", len(updates))
 		for _, u := range updates {
-			fmt.Printf("  %s #%d %s\n", u.RepoKey, u.IssueNum, u.Name)
+			fmt.Printf("  %s #%d %s\n", privacy.RedactRepo(u.Owner, u.Repo), u.IssueNum, privacy.RedactTitle(u.Owner, u.Repo, u.Name))
 			if u.ClearDates {
 				if u.ClearReason == "closed" {
 					fmt.Println("       (clearing dates and estimates - task is closed)")
@@ -246,7 +253,7 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := ghscheduler.ApplyUpdate(client, u); err != nil {
 			logrus.Warnf("Failed to update issue #%d: %v", u.IssueNum, err)
 		} else {
-			fmt.Printf("  Updated %s #%d\n", u.RepoKey, u.IssueNum)
+			fmt.Printf("  Updated %s #%d\n", privacy.RedactRepo(u.Owner, u.Repo), u.IssueNum)
 		}
 	}
 
@@ -255,10 +262,11 @@ func run(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nUpdating scheduling comments...")
 		for _, si := range schedIssues {
 			client := github.NewClient(accessToken, &github.GitHubRepository{Owner: si.Owner, Name: si.Repo})
-			if err := ghscheduler.PostOrUpdateSchedulingComment(client, si); err != nil {
+			redactedSI := privacy.RedactSchedulingIssue(si)
+			if err := ghscheduler.PostOrUpdateSchedulingComment(client, redactedSI); err != nil {
 				logrus.Warnf("Failed to post comment for #%d: %v", si.IssueNum, err)
 			} else {
-				fmt.Printf("  Posted comment on %s/%s #%d\n", si.Owner, si.Repo, si.IssueNum)
+				fmt.Printf("  Posted comment on %s #%d\n", privacy.RedactRepo(si.Owner, si.Repo), si.IssueNum)
 			}
 		}
 	}

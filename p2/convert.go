@@ -11,8 +11,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// IssuesToTasks converts GitHub issues to planner tasks
-func IssuesToTasks(issues map[string]IssueWithProject) ([]planner.Task, []recfile.User, []SchedulingIssue) {
+// IssuesToTasks converts GitHub issues to planner tasks.
+// If privacy is non-nil, private repo information is redacted in log output.
+func IssuesToTasks(issues map[string]IssueWithProject, privacy *PrivacyFilter) ([]planner.Task, []recfile.User, []SchedulingIssue) {
 	gen := lseq.NewGenerator("scheduler")
 	userSet := make(map[string]bool)
 	var tasks []planner.Task
@@ -108,7 +109,13 @@ func IssuesToTasks(issues map[string]IssueWithProject) ([]planner.Task, []recfil
 			if !exists {
 				// Missing dependency - not in the project
 				missingDeps = append(missingDeps, depID)
-				logrus.Warnf("Skipping dependency %s for %s: task not accessible (grant access to %s/%s)", depID, task.ID, blocker.Owner, blocker.Repo)
+				logDepID := depID
+				logRepo := fmt.Sprintf("%s/%s", blocker.Owner, blocker.Repo)
+				if privacy != nil {
+					logDepID = privacy.RedactDepID(depID)
+					logRepo = privacy.RedactRepo(blocker.Owner, blocker.Repo)
+				}
+				logrus.Warnf("Skipping dependency %s for %s: task not accessible (grant access to %s)", logDepID, task.ID, logRepo)
 				continue
 			}
 

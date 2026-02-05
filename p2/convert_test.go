@@ -40,7 +40,7 @@ func TestIssuesToTasks_OnHoldViaSchedulingStatus(t *testing.T) {
 		},
 	}
 
-	tasks, _, _ := IssuesToTasks(issues)
+	tasks, _, _ := IssuesToTasks(issues, nil)
 
 	// Find tasks by title
 	taskMap := make(map[string]planner.Task)
@@ -75,7 +75,7 @@ func TestIssuesToTasks_DraftIssuesAreOnHold(t *testing.T) {
 		},
 	}
 
-	tasks, _, _ := IssuesToTasks(issues)
+	tasks, _, _ := IssuesToTasks(issues, nil)
 
 	// Find tasks by title
 	taskMap := make(map[string]planner.Task)
@@ -123,7 +123,7 @@ func TestIssuesToTasks_PreservesOrder(t *testing.T) {
 		},
 	}
 
-	tasks, _, _ := IssuesToTasks(issues)
+	tasks, _, _ := IssuesToTasks(issues, nil)
 
 	if len(tasks) != 3 {
 		t.Fatalf("expected 3 tasks, got %d", len(tasks))
@@ -163,7 +163,7 @@ func TestIssuesToTasks_SkipsInaccessibleDependencies(t *testing.T) {
 		},
 	}
 
-	tasks, _, _ := IssuesToTasks(issues)
+	tasks, _, _ := IssuesToTasks(issues, nil)
 
 	// Find the blocked task
 	var blockedTask *planner.Task
@@ -208,7 +208,7 @@ func TestIssuesToTasks_UnassignedTasksGetDefaultUser(t *testing.T) {
 		},
 	}
 
-	tasks, users, _ := IssuesToTasks(issues)
+	tasks, users, _ := IssuesToTasks(issues, nil)
 
 	// Find tasks by title
 	taskMap := make(map[string]planner.Task)
@@ -267,7 +267,7 @@ func TestIssuesToTasks_DetectsMissingDependencies(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	// Should have 1 scheduling issue for missing dependency
 	if len(schedIssues) != 1 {
@@ -312,7 +312,7 @@ func TestIssuesToTasks_DetectsOnHoldDependencies(t *testing.T) {
 		},
 	}
 
-	tasks, _, schedIssues := IssuesToTasks(issues)
+	tasks, _, schedIssues := IssuesToTasks(issues, nil)
 
 	// Should have 1 scheduling issue for on-hold dependency
 	if len(schedIssues) != 1 {
@@ -366,7 +366,7 @@ func TestIssuesToTasks_ClosedDependencySkipped(t *testing.T) {
 		},
 	}
 
-	tasks, _, schedIssues := IssuesToTasks(issues)
+	tasks, _, schedIssues := IssuesToTasks(issues, nil)
 
 	// Should have NO scheduling issues - closed deps are satisfied
 	if len(schedIssues) != 0 {
@@ -415,7 +415,7 @@ func TestIssuesToTasks_OnHoldTaskNoSchedulingIssue(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	// Should have only 1 scheduling issue - the on-hold task doesn't get one
 	if len(schedIssues) != 1 {
@@ -449,7 +449,7 @@ func TestIssuesToTasks_DetectsInaccessibleBlockers(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	// Should have 1 scheduling issue for inaccessible blockers
 	if len(schedIssues) != 1 {
@@ -481,7 +481,7 @@ func TestIssuesToTasks_DetectsMissingLowEstimate(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 1 {
 		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
@@ -509,7 +509,7 @@ func TestIssuesToTasks_DetectsMissingHighEstimate(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 1 {
 		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
@@ -537,7 +537,7 @@ func TestIssuesToTasks_DetectsInvalidEstimate(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 1 {
 		t.Fatalf("expected 1 scheduling issue, got %d", len(schedIssues))
@@ -568,7 +568,7 @@ func TestIssuesToTasks_ValidEstimatesNoIssue(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues, got %d: %+v", len(schedIssues), schedIssues)
@@ -588,7 +588,7 @@ func TestIssuesToTasks_EqualEstimatesValid(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues (equal estimates are valid), got %d: %+v", len(schedIssues), schedIssues)
@@ -608,7 +608,7 @@ func TestIssuesToTasks_ZeroEstimatesValid(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues (zero is a valid estimate), got %d: %+v", len(schedIssues), schedIssues)
@@ -629,7 +629,7 @@ func TestIssuesToTasks_OnHoldTaskNoEstimateIssue(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues for on-hold task, got %d: %+v", len(schedIssues), schedIssues)
@@ -649,7 +649,7 @@ func TestIssuesToTasks_ClosedTaskNoEstimateIssue(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues for closed task, got %d: %+v", len(schedIssues), schedIssues)
@@ -670,7 +670,7 @@ func TestIssuesToTasks_DraftTaskNoEstimateIssue(t *testing.T) {
 		},
 	}
 
-	_, _, schedIssues := IssuesToTasks(issues)
+	_, _, schedIssues := IssuesToTasks(issues, nil)
 
 	if len(schedIssues) != 0 {
 		t.Errorf("expected 0 scheduling issues for draft task, got %d: %+v", len(schedIssues), schedIssues)
@@ -690,7 +690,7 @@ func TestIssuesToTasks_BothEstimatesNilReportsMissingAndGetsDefaults(t *testing.
 		},
 	}
 
-	tasks, _, schedIssues := IssuesToTasks(issues)
+	tasks, _, schedIssues := IssuesToTasks(issues, nil)
 
 	// Should report both missing estimates
 	if len(schedIssues) != 1 {
