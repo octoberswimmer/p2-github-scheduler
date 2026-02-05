@@ -28,8 +28,8 @@ func main() {
 		log.Fatalf("get OIDC token: %v", err)
 	}
 
-	// Exchange OIDC token for installation token
-	installToken, err := exchangeToken(brokerURL, oidcToken)
+	// Exchange OIDC token for installation token + license
+	installToken, licenseKey, err := exchangeToken(brokerURL, oidcToken)
 	if err != nil {
 		log.Fatalf("exchange token: %v", err)
 	}
@@ -46,11 +46,19 @@ func main() {
 	}
 	defer file.Close()
 
-	// Mask the token in logs
+	// Mask the token and license in logs
 	fmt.Printf("::add-mask::%s\n", installToken)
+	if licenseKey != "" {
+		fmt.Printf("::add-mask::%s\n", licenseKey)
+	}
 
 	if _, err := fmt.Fprintf(file, "token=%s\n", installToken); err != nil {
 		log.Fatalf("write output: %v", err)
+	}
+	if licenseKey != "" {
+		if _, err := fmt.Fprintf(file, "license=%s\n", licenseKey); err != nil {
+			log.Fatalf("write output: %v", err)
+		}
 	}
 
 	fmt.Println("Successfully obtained installation token")
@@ -98,7 +106,7 @@ func getOIDCToken() (string, error) {
 	return result.Value, nil
 }
 
-func exchangeToken(brokerURL, oidcToken string) (string, error) {
+func exchangeToken(brokerURL, oidcToken string) (string, string, error) {
 	// Normalize broker URL - remove trailing /token if present
 	brokerURL = strings.TrimSuffix(brokerURL, "/token")
 	brokerURL = strings.TrimSuffix(brokerURL, "/")
@@ -108,34 +116,74 @@ func exchangeToken(brokerURL, oidcToken string) (string, error) {
 	payload := map[string]string{"token": oidcToken}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		return "", "", fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("broker returned status %d: %s", resp.StatusCode, string(respBody))
+		return "", "", fmt.Errorf("broker returned status %d", resp.StatusCode)
 	}
 
 	var result struct {
-		Token string `json:"token"`
+		Token      string `json:"token"`
+		MaxIssues  *int64 `json:"n"`
+		PublicOnly *bool  `json:"p"`
+		Signature  *string `json:"s"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("decode broker response: %w", err)
+		return "", "", fmt.Errorf("decode broker response: %w", err)
 	}
 
 	if result.Token == "" || result.Token == "null" {
-		return "", fmt.Errorf("broker response missing token: %s", string(respBody))
+		return "", "", fmt.Errorf("broker response missing token")
 	}
 
-	return result.Token, nil
+	licenseKey, err := buildLicenseKey(result.Token, result.MaxIssues, result.PublicOnly, result.Signature)
+	if err != nil {
+		return "", "", err
+	}
+
+	return result.Token, licenseKey, nil
+}
+
+func buildLicenseKey(token string, maxIssues *int64, publicOnly *bool, signature *string) (string, error) {
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("broker response missing token")
+	}
+	if maxIssues == nil || publicOnly == nil || signature == nil {
+		return "", fmt.Errorf("broker response missing license fields")
+	}
+
+	payload := struct {
+		Token      string `json:"t"`
+		MaxIssues  int64  `json:"n"`
+		PublicOnly bool   `json:"p"`
+		Signature  string `json:"s"`
+	}{
+		Token:      token,
+		MaxIssues:  *maxIssues,
+		PublicOnly: *publicOnly,
+		Signature:  strings.TrimSpace(*signature),
+	}
+
+	if payload.Signature == "" {
+		return "", fmt.Errorf("broker response missing license signature")
+	}
+
+	key, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode license key: %w", err)
+	}
+
+	return string(key), nil
 }

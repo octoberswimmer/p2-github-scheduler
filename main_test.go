@@ -19,7 +19,7 @@ func TestRun_IssueNotInProject_ReturnsNil(t *testing.T) {
 	}
 
 	// Set up environment
-	t.Setenv("GITHUB_TOKEN", "test-token")
+	t.Setenv("P2_LICENSE_KEY", `{"t":"test-token"}`)
 
 	// Create a command with the issue URL
 	cmd := &cobra.Command{}
@@ -58,7 +58,7 @@ func TestRun_IssueInProject_FetchesProject(t *testing.T) {
 	}
 
 	// Set up environment
-	t.Setenv("GITHUB_TOKEN", "test-token")
+	t.Setenv("P2_LICENSE_KEY", `{"t":"test-token"}`)
 
 	cmd := &cobra.Command{}
 	args := []string{"https://github.com/owner/repo/issues/16"}
@@ -82,7 +82,7 @@ func TestRun_RepoURL_FetchesViaProjects(t *testing.T) {
 	}
 
 	// Set up environment
-	t.Setenv("GITHUB_TOKEN", "test-token")
+	t.Setenv("P2_LICENSE_KEY", `{"t":"test-token"}`)
 
 	cmd := &cobra.Command{}
 	args := []string{"https://github.com/owner/repo"}

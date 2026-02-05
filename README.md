@@ -144,5 +144,5 @@ p2-github-scheduler --debug owner/repo
 
 The CLI supports two authentication methods:
 
-1. **Environment variable**: Set `GITHUB_TOKEN` environment variable
+1. **Environment variable**: Set `P2_LICENSE_KEY` (required in GitHub Actions; contains the installation token)
 2. **Device Flow (interactive)**: On first run, you'll be prompted to authenticate via browser. The token is stored securely in your system keyring.

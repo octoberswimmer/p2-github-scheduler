@@ -84,7 +84,7 @@ runs:
     - name: Run scheduler
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+        P2_LICENSE_KEY: ${{ steps.token.outputs.license }}
         TZ: ${{ inputs.timezone }}
       run: |
         GITHUB_URL="${{ inputs.github-url }}"

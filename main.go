@@ -12,6 +12,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/joho/godotenv"
+	p2license "github.com/octoberswimmer/p2/license"
 	"github.com/octoberswimmer/p2-github-scheduler/ghscheduler"
 	"github.com/octoberswimmer/p2-github-scheduler/p2"
 	"github.com/octoberswimmer/p2/github"
@@ -72,11 +73,16 @@ func run(cmd *cobra.Command, args []string) error {
 	// Authenticate with GitHub
 	var accessToken string
 
-	// First check for GITHUB_TOKEN environment variable (for CI)
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		logrus.Debug("Using GITHUB_TOKEN from environment")
+	if licenseKey := strings.TrimSpace(os.Getenv("P2_LICENSE_KEY")); licenseKey != "" {
+		token, err := p2license.ExtractToken(licenseKey)
+		if err != nil {
+			return fmt.Errorf("license key missing token: %w", err)
+		}
 		accessToken = token
 	} else {
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			return fmt.Errorf("P2_LICENSE_KEY is required when running in GitHub Actions")
+		}
 		// Fall back to stored auth (auto-refreshes if expired) or device flow
 		auth, err := github.LoadAndRefreshAuth()
 		if err != nil {
@@ -241,9 +247,15 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	privateCount, publicCount := p2license.CountIssuePrivacy(allIssues)
+
 	if dryRun {
 		fmt.Println("\nDry run - no changes made")
 		return nil
+	}
+
+	if err := p2license.EnforceSchedule(os.Stdout, len(tasks), privateCount, publicCount); err != nil {
+		return err
 	}
 
 	// Apply updates to GitHub
