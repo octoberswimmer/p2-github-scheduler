@@ -96,7 +96,7 @@ jobs:
 ## How It Works
 
 1. When an issue is updated, the workflow requests an OIDC token from GitHub Actions
-2. The OIDC token is exchanged for a scoped GitHub App installation token via p2-penny-pusher
+2. The OIDC token is exchanged for a permission-scoped GitHub App installation token (installation-wide, not repo-scoped) via p2-penny-pusher
 3. The scheduler detects which GitHub Project the issue belongs to
 4. All issues are fetched and converted to p2 tasks with:
    - Issue number as task ID
@@ -107,11 +107,11 @@ jobs:
 5. p2's scheduler runs statistical analysis to calculate completion date ranges
 6. The calculated date fields are updated in GitHub Projects
 
-The installation token is scoped to only:
-- The repository that triggered the workflow
-- Permissions: `issues:write`, `metadata:read`, `projects:write`
+The installation token is installation-wide (not repo-scoped) and grants access to all repositories the app is installed on (Projects v2 can include issues from multiple repos).
+It is permission-scoped to:
+- Permissions: `issues:write`, `metadata:read`, `organization_projects:write`, `contents:read`
 
-The `issues:write` permission is required to post and manage scheduling warning comments.
+The `issues:write` permission is required to post and manage scheduling warning comments. `contents:read` is required to access private issues in Projects v2.
 
 ## Privacy
 
