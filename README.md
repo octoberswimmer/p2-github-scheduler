@@ -73,8 +73,6 @@ permissions:
 
 concurrency:
   group: p2-schedule-${{ github.repository }}
-  # cancel-in-progress causes noisy "Run cancelled" notifications
-  # https://github.com/orgs/community/discussions/13015
   cancel-in-progress: true
 
 jobs:
