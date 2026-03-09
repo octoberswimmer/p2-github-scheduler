@@ -461,6 +461,34 @@ func TestIssuesToTasks_DetectsMissingDependencies(t *testing.T) {
 	}
 }
 
+func TestIssuesToTasks_ClosedDependencyNotInProject(t *testing.T) {
+	// When a dependency is not in the project but is closed (e.g., archived after completion),
+	// it should not be flagged as a missing dependency
+	issues := map[string]IssueWithProject{
+		"github.com/owner/repo/issues/1": {
+			Owner:        "owner",
+			Repo:         "repo",
+			IssueNum:     1,
+			Title:        "Task with closed archived dep",
+			State:        "open",
+			LowEstimate:  ptr(2),
+			HighEstimate: ptr(4),
+			BlockedBy: []github.IssueRef{
+				{Owner: "other", Repo: "archived", Number: 51, State: "CLOSED"},
+			},
+		},
+	}
+
+	_, _, schedIssues := IssuesToTasks(issues, nil)
+
+	// Should have no scheduling issues - closed dependency is satisfied
+	for _, si := range schedIssues {
+		if si.Reason == "missing_dependency" {
+			t.Errorf("expected no missing_dependency issue, got one for issue #%d with details %v", si.IssueNum, si.Details)
+		}
+	}
+}
+
 func TestIssuesToTasks_DetectsOnHoldDependencies(t *testing.T) {
 	issues := map[string]IssueWithProject{
 		"github.com/owner/repo/issues/1": {

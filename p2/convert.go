@@ -236,6 +236,12 @@ func IssuesToTasks(issues map[string]IssueWithProject, privacy *PrivacyFilter) (
 
 			blockerIssue, exists := issues[issueKey]
 			if !exists {
+				// Skip closed dependencies - they're already satisfied
+				// (even if not in the project, e.g., archived issues)
+				if strings.EqualFold(blocker.State, "closed") {
+					logrus.Debugf("Skipping dependency %s for %s: blocker is closed (not in project)", depID, task.ID)
+					continue
+				}
 				// Missing dependency - not in the project
 				missingDeps = append(missingDeps, depID)
 				logDepID := depID
